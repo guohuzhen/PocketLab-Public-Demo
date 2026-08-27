@@ -36,7 +36,7 @@ flowchart TD
 要求：Python 3.11+、[uv](https://docs.astral.sh/uv/)、一个由你本人授权使用的 OpenAI-compatible 模型接口。
 
 ```powershell
-git clone https://github.com/你的用户名/PocketLab-Public-Demo.git
+git clone https://github.com/guohuzhen/PocketLab-Public-Demo.git
 cd PocketLab-Public-Demo
 uv sync --frozen
 Copy-Item .env.example .env.local

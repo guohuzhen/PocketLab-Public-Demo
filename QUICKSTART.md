@@ -5,7 +5,7 @@
 在 PowerShell 中执行：
 
 ```powershell
-git clone https://github.com/你的用户名/PocketLab-Public-Demo.git
+git clone https://github.com/guohuzhen/PocketLab-Public-Demo.git
 cd PocketLab-Public-Demo
 uv sync --frozen
 Copy-Item .env.example .env.local

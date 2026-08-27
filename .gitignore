@@ -1,0 +1,195 @@
+# -----------------------------------------------------------------------------
+# PocketLab local-only files
+#
+# GitHub Desktop automatically hides every untracked path matched below.  This
+# does not remove a file that was already committed; use `git ls-files -ci
+# --exclude-standard` to audit that situation before a release.
+# -----------------------------------------------------------------------------
+
+# Secrets, provider configuration and signing material
+.env
+.env.*
+**/.env
+**/.env.*
+*.env
+*.env.*
+!.env.example
+!**/.env.example
+!*.env.example
+
+credentials*.json
+credentials*.yaml
+credentials*.yml
+service-account*.json
+service_account*.json
+secret*.json
+secrets*.json
+secret*.yaml
+secrets*.yaml
+secret*.yml
+secrets*.yml
+config.local.*
+settings.local.*
+
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.kdbx
+*.mobileprovision
+
+# Browser/login state can contain reusable sessions even without an API key
+cookies*.json
+auth_state*.json
+storage_state*.json
+playwright/.auth/
+**/playwright/.auth/
+
+# Local databases, journals and user history
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
+*.db-journal
+*.wal
+*.shm
+
+# Logs, traces, captures, crash reports and generated machine-readable evals
+*.log
+*.log.*
+*.trace
+*.har
+*.pcap
+*.pcapng
+*.dmp
+*.stackdump
+logs/
+test-results/
+playwright-report/
+blob-report/
+coverage.xml
+junit.xml
+
+# JSON/JSONL result payloads are reproducible and may contain provider output.
+# Keep reviewed Markdown summaries, manifests and holdout definitions tracked.
+evals/results/*.json
+evals/results/*.jsonl
+# `run_agent_harness.py` also emits reproducible timestamped Markdown next to
+# its JSON. Keep deliberately named/reviewed phase reports trackable.
+evals/results/validate-20*.md
+evals/results/resilience-20*.md
+evals/results/phone-replay-20*.md
+
+# Private/raw data landing zones. Reviewed de-identified fixtures remain tracked.
+data/private/
+datasets/private/
+datasets/incoming/
+exports/private/
+uploads/private/
+
+# Self-collected phone pilot: its manifest permits private competition evaluation
+# only and explicitly forbids redistribution.  Keep it local even though account,
+# network and exact timestamp identifiers were removed.
+datasets/phone/light-pilot-phyphox-20260815-v2/
+
+# Reviewed public datasets may keep verified upstream material locally for imports.
+# Commit only reviewed, minimized projections and hash attestations.
+datasets/public/**/_upstream/**
+
+# PerfLoc protobuf sources include timestamps, device metadata and unrelated streams.
+datasets/public/pressure-nist-perfloc-pixel-20180516-v1/source/**/*.pbs
+datasets/public/pressure-nist-perfloc-pixel-20180516-v1/source/protocol_buffers/*.proto
+
+# Python environments, bytecode, caches and package/build artifacts
+.venv/
+venv/
+env/
+ENV/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyright/
+.hypothesis/
+.tox/
+.nox/
+.deepeval/
+.ipynb_checkpoints/
+.coverage
+.coverage.*
+htmlcov/
+.uv-cache/
+pip-wheel-metadata/
+build/
+dist/
+wheels/
+
+# JavaScript/frontend package caches and generated bundles
+node_modules/
+.npm/
+.pnpm-store/
+.yarn/cache/
+.yarn/unplugged/
+.next/
+.nuxt/
+.vite/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# HarmonyOS / DevEco local state and generated application packages
+.hvigor/
+**/.hvigor/
+oh_modules/
+**/oh_modules/
+local.properties
+**/local.properties
+.preview/
+**/.preview/
+*.hap
+*.hsp
+
+# Editors, local coding-agent state and OS metadata
+.codex/
+.codex-tmp/
+.claude/
+.cursor/
+.idea/
+.vscode/
+*.code-workspace
+.DS_Store
+._*
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Generic scratch files and recoverable editor backups
+tmp/
+temp/
+.tmp/
+.temp/
+*.tmp
+*.temp
+*.bak
+*.backup
+*.orig
+*.rej
+*.swp
+*.swo
+*~
+
+# Local headless-browser/render QA scratch (never product assets)
+tmp_edge_profile*/
+tmp_acquisition_*.png
+tmp_edge_dump*.txt

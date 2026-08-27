@@ -1,0 +1,1014 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="PocketLab：从物理问题到手机测量、证据分析和下一项实验。" />
+    <title>PocketLab · 实验智能体</title>
+    <link rel="stylesheet" href="/assets/styles.css?v=20260826h" />
+    <script src="/assets/app.js?v=20260826h" defer></script>
+  </head>
+  <body>
+    <div class="ambient ambient-one" aria-hidden="true"></div>
+    <div class="ambient ambient-two" aria-hidden="true"></div>
+
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="主导航">
+        <a class="brand" href="/app" data-route-link>
+          <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M6 17h4l2.5-7 5 14 3-9 2 5H26" /></svg></span>
+          <span><strong>PocketLab</strong><small>PHYSICAL AGENT</small></span>
+        </a>
+        <nav class="side-nav">
+          <a href="/app" data-route-link data-nav="dashboard"><span>⌂</span><b>工作台</b></a>
+          <a href="/app/cases/new" data-route-link data-nav="cases"><span>＋</span><b>新建诊断</b></a>
+          <a href="/app/explore" data-route-link data-nav="explore"><span>◇</span><b>探索实验</b></a>
+          <a href="/app/history" data-route-link data-nav="history"><span>◷</span><b>历史记录</b></a>
+          <a href="/app/advanced" data-route-link data-nav="advanced"><span>⌁</span><b>证据工作台</b></a>
+          <a href="/app/settings" data-route-link data-nav="settings"><span>⚙</span><b>设备与设置</b></a>
+        </nav>
+        <div class="sidebar-account">
+          <span class="profile-avatar" id="profileInitial">P</span>
+          <div><b id="profileChip">实验者</b><small id="profileUsername">正在读取账号</small></div>
+          <button id="logoutButton" type="button" aria-label="退出登录" title="退出登录">↗</button>
+        </div>
+      </aside>
+
+      <header class="topbar">
+        <div><span class="page-eyebrow" id="pageEyebrow">POCKETLAB WORKSPACE</span><h1 id="pageTitle">工作台</h1></div>
+        <div class="top-actions">
+          <a class="docs-link" href="/docs" target="_blank" rel="noreferrer">API 文档 ↗</a>
+          <span class="health-pill" id="healthPill"><i></i><span id="healthText">正在连接</span></span>
+          <button class="mobile-logout" id="mobileLogoutButton" type="button" aria-label="退出登录">退出</button>
+        </div>
+      </header>
+
+      <main class="app-main" id="top">
+      <section class="app-page dashboard-page shell" data-page="dashboard">
+        <div class="dashboard-hero">
+          <div>
+            <span class="eyebrow">EVIDENCE BEFORE INFERENCE</span>
+            <h2 id="dashboardGreeting">欢迎回来</h2>
+            <p>先说出你想弄明白的现象。PocketLab 会解释更适合“解决问题”还是“探索规律”，确认后再进入对应 Agent。</p>
+            <div class="dashboard-actions">
+              <a class="button button-primary" href="#investigationRouter">输入问题开始</a>
+              <a class="button button-quiet" href="/app/explore" data-route-link>浏览探索实验</a>
+              <button class="button button-secondary" id="continueCaseButton" type="button" hidden>继续最近案例</button>
+            </div>
+          </div>
+          <div class="flow-compact" aria-label="诊断闭环">
+            <span>诊断闭环</span><b>问题 → 假设 → 测量 → 证据 → 结论</b>
+            <small>终止向量判断何时停止，不无限生成任务。</small>
+          </div>
+        </div>
+        <article class="surface investigation-router" id="investigationRouter">
+          <div class="investigation-router-intro"><span class="surface-kicker">ONE QUESTION · TWO SPECIALISTS</span><h3>你现在想弄明白什么？</h3><p>当前基模会直接理解完整语义，并在诊断 Agent 与探索 Agent 之间给出建议。判别只负责分流，不会创建案例、调用实验工具或连接手机。</p></div>
+          <div class="investigation-router-form">
+            <label><span>自然语言问题</span><textarea id="investigationRouterQuestion" maxlength="1200" rows="3" placeholder="例如：冰箱晚上出现周期性异响和轻微振动，我应该怎样排查？"></textarea></label>
+            <label><span>现场条件 <i>选填</i></span><input id="investigationRouterContext" maxlength="1000" placeholder="例如：只在压缩机启动后出现，手机可放在冰箱侧面" /></label>
+            <button class="button button-primary" id="routeInvestigationButton" type="button"><span>判断合适的工作流</span></button>
+          </div>
+          <section class="investigation-route-result" id="investigationRouteResult" hidden>
+            <header><div><span id="investigationRouteBadge">RECOMMENDED</span><h4 id="investigationRouteTitle">—</h4></div><strong id="investigationRouteConfidence">—</strong></header>
+            <p id="investigationRouteSummary">—</p>
+            <div class="investigation-route-sensors" id="investigationRouteSensors"></div>
+            <ul id="investigationRouteReasons"></ul>
+            <p class="investigation-route-privacy" id="investigationRoutePrivacy" hidden></p>
+            <div class="investigation-route-actions">
+              <button class="button button-primary" id="startRecommendedWorkflowButton" type="button"><span>按建议继续</span></button>
+              <button class="button button-quiet" id="startAlternativeWorkflowButton" type="button"><span>改用另一流程</span></button>
+            </div>
+            <small>两条路径共享账号、设备、测量记录和证据工作台，但各自保留专业终止门与报告结构。</small>
+          </section>
+        </article>
+        <div class="dashboard-stats">
+          <article><span>诊断案例</span><b id="dashboardCaseCount">0</b><small>当前账号</small></article>
+          <article><span>测量记录</span><b id="dashboardSessionCount">0</b><small>可复查证据</small></article>
+          <article><span>默认手机</span><b id="dashboardDeviceState">未设置</b><small>phyphox 数据桥</small></article>
+        </div>
+        <div class="dashboard-grid">
+          <article class="surface dashboard-recent">
+            <header><div><span class="surface-kicker">RECENT WORK</span><h3>最近的诊断与探索</h3></div><a href="/app/history" data-route-link>查看全部</a></header>
+            <div class="history-empty" id="dashboardRecentEmpty"><b>还没有实验工作</b><p>从上方输入第一个问题后，会显示在这里。</p></div>
+            <div class="dashboard-case-list" id="dashboardRecentCases"></div>
+          </article>
+          <article class="surface dashboard-device-card">
+            <span class="surface-kicker">PHONE BRIDGE</span><h3>手机数据桥</h3>
+            <p>phyphox 地址保存在当前账号的设置中。连接一次后，新任务会自动填入这台手机。</p>
+            <div class="dashboard-device-status" id="dashboardDeviceDetail">尚未设置默认手机</div>
+            <a class="button button-quiet" href="/app/settings" data-route-link>管理设备</a>
+          </article>
+        </div>
+      </section>
+
+      <section class="app-page shell exploration-section" id="explore" data-page="explore" hidden>
+        <section class="exploration-home" id="explorationHome">
+          <div class="exploration-home-heading">
+            <span class="surface-kicker">REAL-WORLD EXPLORATION</span>
+            <h2>选择一种探索方式</h2>
+            <p>预设实验提供已验证的纵向案例；自由探索可以把自然语言问题转成受约束草案，并在服务端证据门禁下进行多传感器、多轮设计。</p>
+          </div>
+          <div class="exploration-path-grid">
+            <a class="exploration-path-card available" href="/app/explore/presets" data-route-link>
+              <span>01 · PRESET LABS</span>
+              <h3>预设实验</h3>
+              <p>选择 Light、Pressure、运动、声音或位置案例，使用公开证据演示，或继续已保存的真机实验。</p>
+              <b>进入预设实验 →</b>
+            </a>
+            <a class="exploration-path-card available general" href="/app/explore/general" data-route-link>
+              <span>02 · GENERAL EXPLORATION</span>
+              <h3>自由探索</h3>
+              <p>提出一个可比较的物理问题，自选已支持传感器；系统生成冻结协议并逐轮决定测量顺序、可选探测与充分度。</p>
+              <b>进入自由探索 Beta →</b>
+            </a>
+          </div>
+        </section>
+
+        <div class="general-exploration-workspace" id="generalExplorationWorkspace" hidden>
+          <div class="exploration-subnav">
+            <a id="generalExplorationBackLink" href="/app/explore" data-route-link>← 返回探索方式</a>
+            <div><span>GENERAL EXPLORATION · BOUNDED BETA</span><b>自由探索工作台</b></div>
+          </div>
+
+          <section class="surface general-exploration-builder" id="generalExplorationBuilder">
+            <header>
+              <div><span class="surface-kicker">QUESTION → FROZEN PROTOCOL</span><h3>把物理设想变成可执行比较</h3><p>当前支持两个必需条件、一个主要传感器，以及最多两个互斥的可选探测传感器；两个必需传感器还可在同一 phyphox 实验中同步采集。协议、分析器、证据质量和终止始终由服务端校验。</p></div>
+              <div class="general-beta-boundary" id="generalReadinessBoundary" data-maturity="loading"><b id="generalReadinessBadge">正在核对成熟度…</b><span id="generalReadinessSummary">General Agent Beta、Phyphox 兼容性与真机验证是三个独立层级。</span><small id="generalReadinessGates">Gate C — · Gate E — · Gate H —</small></div>
+            </header>
+            <section class="general-question-compiler" aria-labelledby="generalCompilerHeading">
+              <div class="general-compiler-heading">
+                <span>STEP 1 · AGENT DRAFT</span>
+                <h4 id="generalCompilerHeading">先用一句话起草实验</h4>
+                <p>Agent 只能从服务端能力表选择传感器与分析量。它不会创建实验、调用手机或决定结论；输出会先填入下方编辑器供你检查。</p>
+              </div>
+              <div class="general-compiler-form">
+                <label class="general-compiler-question"><span>你的现实世界问题或物理设想</span><textarea id="generalNaturalQuestion" maxlength="1200" rows="3" placeholder="例如：台灯打开后桌面不同位置的照度变化是否稳定？"></textarea></label>
+                <div class="general-compiler-actions">
+                  <label><span>限定为单一传感器 <i>选填</i></span><select id="generalPreferredSensor"><option value="">不限定；允许 Agent 组合受支持传感器</option></select><small>选择后会成为严格允许列表，不再生成多传感器竞争实验。</small></label>
+                  <button class="button button-secondary" id="generalCompileButton" type="button" disabled>生成可编辑草案</button>
+                </div>
+                <div class="general-compiler-privacy" aria-label="Agent 草案阶段的敏感传感器许可">
+                  <div><b>敏感候选许可</b><span>仅影响本次草案；创建协议时仍需再次确认。</span></div>
+                  <label><input id="generalCompilerMicrophonePrivacy" type="checkbox" /><span>允许 Agent 把麦克风派生相对级别纳入候选；不保存原始音频或转写</span></label>
+                  <label><input id="generalCompilerLocationPrivacy" type="checkbox" /><span>允许 Agent 把位置相对几何纳入候选；通用报告不展示绝对坐标</span></label>
+                </div>
+                <div class="general-compiler-result" id="generalCompileResult" hidden></div>
+                <div class="general-compiler-clarification" id="generalCompilerClarification" hidden>
+                  <div class="general-clarification-heading"><b>补充并冻结实验边界</b><span>条件选择与物理机制是两件事。服务端会精确绑定你填写的条件，未选操作不会被 Agent 重新包装成实验条件或机制。</span></div>
+                  <div class="general-clarification-contracts" id="generalClarificationContracts" data-panel-count="0">
+                    <section class="general-clarification-panel general-clarification-condition" id="generalConditionClarification" hidden>
+                      <header><b>条件合同</b><span>这三个字段会由服务端逐项校验</span></header>
+                      <div class="general-clarification-condition-grid">
+                        <label><span>本次唯一改变的因素</span><input id="generalClarificationVariable" maxlength="120" placeholder="例如：小推车是否移动" /></label>
+                        <label><span>参考条件</span><input id="generalClarificationReference" maxlength="100" placeholder="例如：小推车静止" /></label>
+                        <label><span>比较条件</span><input id="generalClarificationComparison" maxlength="100" placeholder="例如：沿同一路线移动" /></label>
+                      </div>
+                      <small>原问题中未选中的其他操作会被丢弃，不会自动变成可选对照。</small>
+                    </section>
+                    <section class="general-clarification-panel" id="generalMechanismClarification" hidden>
+                      <header><b>竞争机制 <i>独立于条件</i></b><span id="generalMechanismClarificationHint">只有你明确保留时才生成假设图</span></header>
+                      <label class="general-mechanism-toggle"><input id="generalKeepMechanisms" type="checkbox" /><span>另行保留两个物理机制</span></label>
+                      <div class="general-mechanism-fields" id="generalMechanismFields">
+                        <label><span>机制一</span><input id="generalFirstMechanism" maxlength="160" placeholder="例如：结构旋转耦合" /></label>
+                        <label><span>机制二</span><input id="generalSecondMechanism" maxlength="160" placeholder="例如：安装位置振动传递" /></label>
+                      </div>
+                    </section>
+                    <section class="general-clarification-panel" id="generalFreeformClarification" hidden>
+                      <header><b>其他缺失信息</b><span>只用于可观测量、隐私或能力边界</span></header>
+                      <label><span>你的补充说明</span><textarea id="generalClarificationAnswer" maxlength="1200" rows="3" placeholder="请只回答上方尚未解决的问题。"></textarea></label>
+                    </section>
+                  </div>
+                  <button class="button button-secondary" id="generalClarificationRetry" type="button" disabled>按冻结边界重新生成</button>
+                </div>
+                <div class="general-exploration-status" id="generalCompileStatus" role="status">这里只生成草案；下一步仍需你检查并单独创建冻结协议。</div>
+              </div>
+            </section>
+            <div class="general-builder-divider"><span>STEP 2 · HUMAN REVIEW</span><b>检查并调整 Agent 草案</b><small>没有使用 Agent 也可以直接填写以下结构化表单。</small></div>
+            <div class="general-builder-grid">
+              <div class="general-builder-main">
+                <label><span>实验名称</span><input id="generalTitle" maxlength="160" value="我的自由探索" /></label>
+                <label><span>你想比较什么？</span><textarea id="generalQuestion" maxlength="1200" rows="4" placeholder="例如：台灯开启前后，桌面照度是否出现稳定且可重复的变化？"></textarea></label>
+                <label><span>自变量（本次主动改变的条件）</span><input id="generalIndependentVariable" maxlength="120" placeholder="例如：台灯开关状态" /></label>
+                <div class="general-condition-grid">
+                  <label><span>参考条件</span><input id="generalReferenceLabel" maxlength="100" placeholder="例如：台灯关闭" /></label>
+                  <label><span>比较条件</span><input id="generalComparisonLabel" maxlength="100" placeholder="例如：台灯开启" /></label>
+                </div>
+                <label><span>可选安全对照 <i>选填</i></span><input id="generalOptionalControl" maxlength="100" placeholder="例如：保持光照不变，只旋转手机" /></label>
+                <label><span>执行方式</span><select id="generalExecutionMode"><option value="phone_upload">现实实验：phyphox / 已保存记录</option><option value="protocol_emulator">模拟演练：不读取手机，可跑完整软件闭环</option></select><small id="generalExecutionBoundary">现实实验可以形成当前现场证据；是否达到真机 Gate C 仍由独立评测决定。</small></label>
+                <label><span>多传感器采集方式</span><select id="generalAlignment"><option value="sequential">依次采集（兼容性更高）</option><option value="simultaneous">同步采集（需同一 phyphox 实验）</option></select></label>
+              </div>
+              <aside class="general-builder-sensors">
+                <label><span>主要传感器</span><select id="generalPrimarySensor"><option value="">正在读取通用能力…</option></select></label>
+                <label><span>必需辅助传感器 <i>选填</i></span><select id="generalSupportingSensor"><option value="">不使用</option></select></label>
+                <label><span>Agent 候选探测 A <i>选填</i></span><select id="generalOptionalSensor"><option value="">不使用</option></select></label>
+                <label><span>Agent 候选探测 B <i>选填</i></span><select id="generalOptionalSensor2"><option value="">不使用</option></select></label>
+                <div class="general-sensor-summary" id="generalSensorSummary">选择主要传感器后，将显示服务端锁定的分析量。</div>
+                <label class="general-privacy-confirm"><input id="generalPrivacyConfirm" type="checkbox" /><span>如果选择麦克风或位置，我理解其隐私边界并同意只保留协议所需派生结果</span></label>
+                <label class="general-hypothesis-confirm" hidden><input id="generalHypothesisConfirm" type="checkbox" /><span>我已检查 Agent 起草的竞争假设与可观测预测，并理解它们尚未被证据证实</span></label>
+                <button class="button button-primary" id="generalCreateButton" type="button">创建冻结实验协议</button>
+                <div class="general-exploration-status" id="generalCreateStatus" role="status">不会读取 API key、原始音频或账号外的数据。</div>
+              </aside>
+            </div>
+          </section>
+
+          <section class="surface general-exploration-run" id="generalExplorationRun" hidden>
+            <header class="general-run-heading">
+              <div><span class="surface-kicker">ACTIVE GENERAL EXPLORATION</span><h3 id="generalRunTitle">当前自由探索</h3><p id="generalRunQuestion"></p></div>
+              <div class="general-run-meta"><span>REVISION</span><b id="generalRunRevision">—</b><small id="generalRunStatus">—</small></div>
+            </header>
+            <div class="general-run-layout">
+              <section class="general-current-task">
+                <span class="task-step" id="generalTaskStep">CURRENT TASK</span>
+                <h4 id="generalTaskTitle">等待创建实验</h4>
+                <div id="generalTaskInstruction"></div>
+                <div class="general-task-tags" id="generalTaskTags"></div>
+                <label class="general-controls-confirm"><input id="generalControlsConfirm" type="checkbox" /><span id="generalControlsConfirmText">我已按任务说明只改变自变量，并确认记录来自当前实验现场</span></label>
+                <div class="general-acquisition-plan" id="generalAcquisitionPlan"><p>正在读取服务端取证计划…</p></div>
+                <div class="general-measurement-sources" id="generalMeasurementSources">
+                  <section class="general-live-source" id="generalLiveSourcePanel">
+                    <header><span>LIVE PHONE</span><b>从已保存的 phyphox 手机直接采集</b></header>
+                    <p id="generalLiveStatus">正在读取默认手机与当前任务传感器…</p>
+                    <label><span>采集时长（秒）</span><input id="generalLiveDuration" type="number" min="1" max="300" step="1" value="8" /></label>
+                    <label class="general-live-privacy"><input id="generalLivePrivacy" type="checkbox" /><span>我确认只在可信局域网短时开启远程访问，并理解当前传感器的隐私边界</span></label>
+                    <button class="button button-primary" id="generalLiveCapture" type="button" disabled>从手机采集并继续</button>
+                    <small>地址只从账号设置读取，不会发送给模型；一次点击最多触发一次手机采集。</small>
+                  </section>
+                  <section class="general-saved-source" id="generalSavedSourcePanel">
+                    <header><span>EXISTING RECORD</span><b>绑定已经保存的同类记录</b></header>
+                    <div class="general-recording-bind" id="generalRecordingBind">
+                      <div class="general-recording-selectors" id="generalRecordingSelectors"><p>请选择当前任务所需记录。</p></div>
+                      <button class="button button-quiet" id="generalRefreshRecordings" type="button">刷新记录</button>
+                    </div>
+                    <button class="button button-secondary" id="generalSubmitMeasurement" type="button">绑定已有证据并继续</button>
+                    <small>公开回放不会出现在这里；同步任务必须为每个传感器选择同一 capture group 的记录。</small>
+                  </section>
+                  <section class="general-simulation-source" id="generalSimulationSourcePanel" hidden>
+                    <header><span>SIMULATED REHEARSAL</span><b>运行同一分析器、Planner 与终止链</b></header>
+                    <p>只生成带 <code>protocol_emulator</code> lineage 的确定性 analyzer-contract 序列。它能验收软件闭环与多传感器决策，但不是现实、公开或手机证据。</p>
+                    <label><span>本次演练信号</span><select id="generalSimulationProfile"><option value="clear_contrast">清晰条件差异（通常可动态提前结束）</option><option value="near_equal">接近重复波动（通常需要完整重复）</option><option value="reversed_contrast">反向条件差异（检验方向适应）</option></select></label>
+                    <button class="button button-primary" id="generalSimulateMeasurement" type="button" disabled>生成本轮模拟证据并继续</button>
+                    <small>Gate C credited 0 · user phone evidence false · 结果会写入当前账号的“模拟演练”历史。</small>
+                  </section>
+                </div>
+                <div class="general-exploration-status" id="generalRunMessage" role="status">选择当前任务对应的记录后继续。</div>
+              </section>
+              <aside class="general-run-progress">
+                <h4>证据与终止</h4>
+                <div class="general-progress-grid" id="generalProgress"></div>
+                <div class="general-sufficiency" id="generalSufficiency"></div>
+                <div class="general-activation-rule" id="generalActivationRule" hidden></div>
+                <h4>当前阻塞项</h4>
+                <ul id="generalBlockers"></ul>
+              </aside>
+            </div>
+            <section class="general-reasoning-checkpoint" id="generalReasoningCheckpoint" hidden>
+              <header><div><span>AMBIGUITY CHECKPOINT</span><h4 id="generalCheckpointTitle">继续探索，还是依据当前证据收手？</h4></div><b>USER DECISION</b></header>
+              <p id="generalCheckpointPrompt"></p>
+              <div class="general-checkpoint-evidence" id="generalCheckpointEvidence"></div>
+              <div class="general-checkpoint-actions">
+                <button class="button button-secondary" id="generalCheckpointStop" type="button">依据当前证据收手</button>
+                <button class="button button-primary" id="generalCheckpointContinue" type="button">继续 Agent 推荐测量</button>
+              </div>
+              <small>选择“收手”不会伪装成高确定性结论；选择“继续”只会执行已冻结的下一项判别测量。</small>
+            </section>
+            <section class="general-trajectory-section" id="generalTrajectorySection">
+              <header>
+                <div><span>MEASURE → READ EVIDENCE → ADAPT → STOP</span><h4>实验路线与自动决策</h4><p>每一行对应服务端实际保存的一项任务。这里把采集来源、分析量、质量判断和下一步理由连成一条可追溯路线。</p></div>
+                <b id="generalTrajectoryStatus">0 STEPS</b>
+              </header>
+              <div class="general-trajectory-list" id="generalTrajectoryList"><p>创建实验后会从第一项任务开始显示。</p></div>
+            </section>
+            <section class="general-hypothesis-section" id="generalHypothesisSection" hidden>
+              <header><div><span>UNTESTED HYPOTHESIS GRAPH</span><h4>竞争假设与可观测预测</h4><p>这些是假设，不是结论。方向匹配由服务端从有效证据生成，Agent 只能选择能区分假设的冻结测量候选。</p></div><b>0 HYPOTHESES</b></header>
+              <div class="general-hypothesis-list" id="generalHypothesisList"></div>
+            </section>
+            <details class="reality-feedback" id="generalRealityFeedback">
+              <summary>现场情况和 Agent 想的不一样？告诉它并重新规划</summary>
+              <p>例如“我家没有水箱”“手机不能放在这个位置”“这一步我不知道怎样安全完成”。旧实验和测量不会删除，会保留在旧版本中。</p>
+              <label><span>哪里不符合实际</span><select id="generalFeedbackType"><option value="environment_fact">补充一个现场事实</option><option value="hypothesis_needs_correction">某条解释只有一部分不对</option><option value="hypothesis_not_applicable">某条解释在我家完全不可能</option><option value="task_not_feasible">这一步在我家做不了</option><option value="instruction_unclear">我没看懂怎样操作</option></select></label>
+              <div class="reality-feedback-selection" id="generalFeedbackSelection">尚未指定某条解释；你也可以只补充现场情况。</div>
+              <label><span>请用自己的话说明</span><textarea id="generalFeedbackMessage" maxlength="800" rows="3" placeholder="例如：我家厕所没有水箱，只有墙内管道；手机也无法固定到管道表面。"></textarea></label>
+              <label class="reality-feedback-privacy"><input id="generalFeedbackPrivacy" type="checkbox" /><span>如果新计划仍需麦克风或位置，我同意继续只保留实验所需的派生结果</span></label>
+              <button class="button button-secondary" id="generalFeedbackSubmit" type="button">保存现场事实并重新规划</button>
+              <div class="reality-feedback-status" id="generalFeedbackStatus" role="status"></div>
+            </details>
+            <details class="general-public-components" id="generalPublicComponents">
+              <summary>
+                <div><span>PUBLIC DATA REPLAY · OPTIONAL</span><h4>公开数据回放（独立能力演示）</h4><p>它只验证相关传感器的分析与 Agent 决策链，不会加入当前实验、不会替代现场条件，也不会形成多传感器联合结论。</p></div>
+                <b>CASE EVIDENCE +0</b>
+              </summary>
+              <div class="general-public-components-body">
+                <div class="general-public-boundaries" id="generalPublicBoundaries"></div>
+                <label class="general-public-privacy"><input id="generalPublicPrivacy" type="checkbox" /><span>我确认本次只在本机运行公开回放，并理解结果仅属于公开数据组件；它不会计入当前实验或真机 Gate C</span></label>
+                <div class="general-public-component-list" id="generalPublicComponentList"><p>正在匹配当前协议的公开组件…</p></div>
+                <div class="general-exploration-status" id="generalPublicStatus" role="status">正在读取来源验证结果…</div>
+                <article class="general-public-result" id="generalPublicResult" hidden></article>
+              </div>
+            </details>
+            <div class="general-audit-grid">
+              <details open><summary>证据轨迹</summary><div id="generalEvidenceTrace"></div></details>
+              <details><summary>设计决策与 Agent 审计</summary><div id="generalPlannerTrace"></div></details>
+            </div>
+            <section class="general-final-report" id="generalFinalReport" hidden>
+              <header><span>AGENT PHYSICAL ANALYSIS</span><div><b id="generalReportConfidence">—</b><b id="generalReportBasis">—</b></div></header>
+              <h4 id="generalReportAnswer"></h4>
+              <p class="general-report-narrative" id="generalReportNarrative"></p>
+              <p id="generalReportReason"></p>
+              <section class="general-reasoning-analysis" id="generalReasoningAnalysis" hidden>
+                <header><div><span>EVIDENCE → MECHANISM → CONFIDENCE</span><h5>Agent 物理解释与竞争因素排序</h5></div><b id="generalReasoningScore">—</b></header>
+                <p id="generalReasoningMechanism"></p>
+                <div class="general-reasoning-explanations" id="generalReasoningExplanations"></div>
+              </section>
+              <section class="general-visualization-section">
+                <header><div><span>SERVER-OWNED ARTIFACT</span><h5>条件对比可视化</h5></div><p>每个传感器使用独立纵轴；点为重复中位数，误差线为中位绝对偏差（MAD）。</p></header>
+                <div class="general-visualization-grid" id="generalVisualizationGrid"></div>
+              </section>
+              <div class="general-summary-grid" id="generalSummaryGrid"></div>
+              <div class="general-contrast-list" id="generalContrastList"></div>
+              <section class="general-report-hypothesis-section" id="generalReportHypothesisSection" hidden>
+                <header><div><span>SERVER-ASSESSED PREDICTIONS</span><h5>竞争假设证据审计</h5></div><p>这里保留预注册预测的逐项审计；Agent 会结合主要效应、控制条件与辅助事实形成机制排序，审计结果不会遮盖上方的直接答案。</p></header>
+                <div class="general-report-hypothesis-conclusion" id="generalReportHypothesisConclusion"></div>
+                <div class="general-report-hypothesis-list" id="generalReportHypotheses"></div>
+              </section>
+              <section class="general-auxiliary-section" id="generalAuxiliarySection" hidden>
+                <h5>Agent 追加的辅助观察</h5>
+                <p>辅助测量会作为低权重事实进入 Agent 解释排序，用来支持、削弱或标记混杂；它们不能仅凭自身变化取代主要传感器结论。</p>
+                <div class="general-auxiliary-list" id="generalAuxiliaryList"></div>
+              </section>
+              <h5>结论边界</h5><ul id="generalReportBoundaries"></ul>
+            </section>
+          </section>
+        </div>
+
+        <div class="exploration-preset-workspace" id="explorationPresetWorkspace" hidden>
+        <div class="exploration-subnav">
+          <a id="explorationBackLink" href="/app/explore" data-route-link>← 返回探索方式</a>
+          <div><span>PRESET LABS</span><b>预设实验目录</b></div>
+        </div>
+        <div class="exploration-hero">
+          <div>
+            <span class="surface-kicker">REAL-WORLD EXPLORATION</span>
+            <h2>把手机变成一间随身实验室</h2>
+            <p>不从“震动”出发，而从你真正想回答的问题出发。PocketLab 会区分当前已能端到端分析的实验、已经能识别数据通道的实验，以及仍在规划中的扩展。</p>
+          </div>
+          <div class="capability-overview" id="explorationCapabilityOverview">
+            <span>当前 phyphox 实验</span>
+            <b>尚未检测</b>
+            <small>在“设备与设置”中连接手机后，这里会显示当前打开实验的输入能力。</small>
+          </div>
+        </div>
+        <article class="surface capability-check-panel" id="capabilityCheckPanel" hidden aria-live="polite">
+          <header><div><span class="surface-kicker">CURRENT EXPERIMENT CAPABILITY CHECK</span><h3 id="capabilityCheckTitle">设备能力检查</h3></div><b id="capabilityCheckStatus">—</b></header>
+          <p id="capabilityCheckSummary"></p>
+          <div class="capability-check-grid">
+            <section><h4>已识别通道</h4><div id="capabilityCheckChannels"></div></section>
+            <section><h4>当前边界</h4><ul id="capabilityCheckBlockers"></ul></section>
+            <section><h4>下一步</h4><ol id="capabilityCheckNextSteps"></ol></section>
+          </div>
+          <small id="capabilityCheckPrivacy"></small>
+        </article>
+
+        <article class="surface exploration-active-runs" id="explorationActiveRunsPanel">
+          <header><div><span class="surface-kicker">IN-PROGRESS EXPERIMENTS</span><h3>进行中的实验</h3></div><a href="/app/history" data-route-link>查看全部历史</a></header>
+          <div class="history-empty" id="explorationActiveRunsEmpty"><b>没有进行中的实验</b><p>选择下方预设后才会创建新实验；进入本页不会自动恢复旧实验。</p></div>
+          <div class="exploration-active-list" id="explorationActiveRuns"></div>
+        </article>
+
+        <section class="exploration-catalog" id="explorationCatalogPanel">
+          <div class="exploration-catalog-heading"><span class="surface-kicker">CHOOSE A PRESET</span><h3>选择一个已验证的实验</h3><p>每张卡只负责进入对应实验；具体参数会在进入后按传感器显示。</p></div>
+          <div class="exploration-toolbar" role="group" aria-label="探索案例筛选">
+            <button class="active" type="button" data-exploration-filter="all">全部案例</button>
+            <button type="button" data-exploration-filter="ready">Agent 可运行</button>
+            <button type="button" data-exploration-filter="phone">匹配当前实验</button>
+          </div>
+          <div class="exploration-legend">
+            <span><i class="ready"></i>端到端可运行</span>
+            <span><i class="beta"></i>受限 Agent Beta</span>
+            <span><i class="analysis"></i>确定性分析可用</span>
+            <span><i class="detectable"></i>已支持能力识别</span>
+            <span><i class="planned"></i>规划接入</span>
+          </div>
+          <div class="exploration-empty" id="explorationEmpty" hidden>当前筛选条件下没有匹配案例。</div>
+          <div class="exploration-grid" id="explorationGrid"></div>
+        </section>
+
+        <article class="surface exploration-setup" id="explorationSetupPanel" hidden aria-labelledby="explorationSetupTitle">
+          <header><div><span class="surface-kicker">EXPERIMENT SETUP</span><h3 id="explorationSetupTitle">准备预设实验</h3></div><button class="button button-quiet" id="explorationSetupCancelButton" type="button">返回目录</button></header>
+          <p id="explorationSetupQuestion"></p>
+          <div class="exploration-setup-options">
+            <section class="exploration-mode-card phone"><span>真机数据</span><h4 id="explorationSetupPhoneTitle">连接 phyphox 采集当前手机</h4><p id="explorationSetupPhoneDescription">使用当前手机的对应传感器采集，并运行已注册的确定性分析器。</p><div id="explorationDistanceConstraint" hidden><label><span>最大可用距离（m，可选）</span><input id="explorationMaxDistance" type="number" min="0.5" max="4" step="0.01" placeholder="例如 1.50" /><small>Light 距离协议必须包含预注册起点 0.50 m。</small></label></div><button class="button button-primary" id="explorationSetupStartButton" type="button">进入真机实验区</button></section>
+            <section class="exploration-mode-card simulation"><span>模拟数据</span><h4>使用公开真实数据模拟实验流程</h4><p>运行与当前传感器匹配的公开数据 Agent Beta，保存报告与轨迹，但不计入你的真机 Gate C。</p><div class="exploration-simulation-scope"><b>本次模拟实际回答</b><span id="explorationSimulationQuestion"></span><small id="explorationSimulationScope"></small></div><button class="button button-secondary" id="explorationSetupPublicButton" type="button">使用公开数据模拟</button></section>
+          </div>
+        </article>
+        <article class="surface investigation-workbench" id="investigationWorkbench" hidden aria-labelledby="investigationTitle">
+          <header class="investigation-heading">
+            <div><span class="surface-kicker">EXECUTABLE PROTOCOL · BETA</span><h3 id="investigationTitle">可执行探索实验</h3><p id="investigationQuestion"></p></div>
+            <div class="investigation-revision"><span>REVISION</span><b id="investigationRevision">—</b></div>
+          </header>
+          <div class="investigation-layout">
+            <section class="investigation-task">
+              <span class="task-step" id="investigationTaskStep">CURRENT TASK</span>
+              <h4 id="investigationTaskTitle">准备实验</h4>
+              <p id="investigationTaskInstruction"></p>
+              <div class="investigation-decision" id="investigationDecision">
+                <header><span>WHY THIS STEP</span><b id="investigationDecisionSource">PROTOCOL</b></header>
+                <p id="investigationDecisionReason">由已验证实验协议生成。</p>
+                <small id="investigationDecisionBasis"></small>
+              </div>
+              <div class="investigation-controls" id="investigationControls"></div>
+              <div class="investigation-fields">
+                <label id="investigationDistanceField" hidden><span>实际距离（m）</span><input id="investigationDistance" type="number" min="0.1" max="4" step="0.001" /></label>
+                <label><span>采集时长（秒）</span><input id="investigationDuration" type="number" min="1" max="300" step="1" value="8" /></label>
+                <label><span>绑定已有光照记录</span><select id="investigationRecording"><option value="">选择 v2 光照记录</option></select></label>
+              </div>
+              <label class="investigation-observation"><span>现场观察（可选）</span><textarea id="investigationObservation" maxlength="800" placeholder="例如：读数稳定、光源刚预热、附近有人经过；这些文字只作为不可信现场备注，不会覆盖数值门禁。"></textarea></label>
+              <label class="investigation-confirm"><input id="investigationConfirm" type="checkbox" /><span>我已执行上述控制条件，并确认只在可信局域网短时开启 phyphox 远程访问</span></label>
+              <div class="investigation-actions">
+                <button class="button button-primary" id="investigationCaptureButton" type="button"><span>按当前任务从手机采集</span></button>
+                <button class="button button-quiet" id="investigationBindButton" type="button">绑定已有记录</button>
+              </div>
+              <div class="investigation-error" id="investigationError" role="alert" hidden><div><b>本次操作未完成</b><span id="investigationErrorMessage"></span></div><button type="button" id="investigationRefreshButton">刷新实验状态</button></div>
+              <div class="sensor-lab-status" id="investigationStatus">请完成当前任务后提交证据。</div>
+            </section>
+            <aside class="investigation-progress">
+              <span class="surface-kicker">TERMINATION VECTOR</span>
+              <div class="investigation-progress-grid" id="investigationProgress"></div>
+              <div class="investigation-decision-state" id="investigationDecisionState"></div>
+              <h4>距离结束还差什么</h4>
+              <ul class="investigation-blockers" id="investigationBlockers"></ul>
+              <details class="investigation-audit" open><summary>证据轨迹</summary><div class="investigation-trace" id="investigationEvidenceTrace"></div></details>
+              <details class="investigation-audit"><summary>确定性工具调用</summary><div class="investigation-trace" id="investigationToolTrace"></div></details>
+              <details class="investigation-audit"><summary>受限 Agent 规划轨迹</summary><div class="investigation-trace" id="investigationPlannerTrace"></div></details>
+            </aside>
+          </div>
+          <section class="investigation-report" id="investigationReport" hidden>
+            <header><span>FINAL EXPERIMENT FEEDBACK</span><div><b id="investigationConfidence">—</b><b id="investigationOutcome">—</b></div></header>
+            <h4 id="investigationConclusion"></h4>
+            <p id="investigationStopReason"></p>
+            <div class="investigation-key-metrics" id="investigationKeyMetrics"></div>
+            <div class="investigation-chart" id="investigationChart"></div>
+            <ul class="investigation-artifact-warnings" id="investigationArtifactWarnings"></ul>
+            <div class="investigation-result-table" id="investigationResultTable"></div>
+            <h5>仍然存在的不确定性</h5>
+            <ul id="investigationUncertainties"></ul>
+            <div class="investigation-market-boundary" id="investigationMarketBoundary">尚未经过市场与跨设备验证</div>
+            <h5>结论边界</h5>
+            <ul id="investigationBoundaries"></ul>
+          </section>
+        </article>
+        <details class="exploration-advanced-tools" id="explorationAdvancedTools">
+          <summary>高级工具 · 直接采集单条传感器记录</summary>
+        <article class="surface sensor-lab" aria-labelledby="sensorLabTitle">
+          <header class="sensor-lab-heading">
+            <div>
+              <span class="surface-kicker">DETERMINISTIC SENSOR LAB · V2</span>
+              <h3 id="sensorLabTitle">先验证传感器，再进入 Agent 闭环</h3>
+              <p>这里直接采集当前 phyphox 实验，并运行确定性分析器。新传感器目前只到 <code>analysis_ready</code>，结果会保存为独立 v2 记录，但不会绑定为诊断证据。</p>
+            </div>
+            <div class="sensor-lab-gate"><b>Gate C–E 未通过</b><span>尚无 3 × 2 × 3 真机数据与完整 Agent 回放</span></div>
+          </header>
+          <div class="sensor-capability-grid" id="sensorCapabilityGrid"><div class="sensor-capability-empty">正在读取分析器能力…</div></div>
+          <div class="sensor-lab-form">
+            <label><span>选择分析量</span><select id="sensorLabSensor"><option value="">请选择当前 phyphox 实验对应的传感器</option></select></label>
+            <label><span>采集时长（秒）</span><input id="sensorLabDuration" type="number" min="1" max="300" step="1" value="8" /></label>
+            <label><span>记录名称</span><input id="sensorLabLabel" maxlength="80" value="真实手机传感器记录" /></label>
+            <label class="sensor-privacy-check"><input id="sensorLabPrivacy" type="checkbox" /><span>我确认声音派生量或位置轨迹的隐私提示</span></label>
+            <button class="button button-primary" id="sensorLabCaptureButton" type="button" disabled><span>从当前 phyphox 实验采集</span></button>
+          </div>
+          <div class="sensor-lab-status" id="sensorLabStatus">请先在“设备与设置”保存并检测手机，再在 phyphox 打开相应的原始实验。</div>
+          <div class="sensor-lab-result" id="sensorLabResult" hidden>
+            <header><div><span>DETERMINISTIC RESULT</span><h4 id="sensorLabResultTitle">分析完成</h4></div><b id="sensorLabConfidence">—</b></header>
+            <div class="sensor-metric-grid" id="sensorLabMetrics"></div>
+            <ul id="sensorLabWarnings"></ul>
+          </div>
+        </article>
+        </details>
+        <article class="surface public-replay-lab" id="publicReplayLab" hidden aria-labelledby="publicReplayTitle">
+          <header class="public-replay-heading">
+            <div>
+              <span class="surface-kicker">PUBLIC EVIDENCE REPLAY · V2</span>
+              <h3 id="publicReplayTitle">公开数据回放</h3>
+              <p>把有来源、许可和哈希校验的公开数据导入当前账号，并复用同一套确定性分析器。它适合离线演示与回归验证，但不会冒充你手机刚刚采集的证据。</p>
+            </div>
+            <div class="public-replay-gate" aria-label="公开回放就绪边界">
+              <b>Gate C / E / H 尚未全部通过</b>
+              <span><code>Gate C=0</code> · <code>Gate E=not_evaluated</code> · <code>Gate H=not_evaluated</code></span>
+              <span><code>public_replay_ready=false</code> · <code>market_validated=false</code> · <code>agent_ready=false</code></span>
+            </div>
+          </header>
+          <section class="public-light-runner" id="publicLightRunner" hidden aria-labelledby="publicLightRunnerTitle">
+            <div class="public-light-runner-intro">
+              <span class="surface-kicker">BOUNDED LIGHT AGENT LOOP</span>
+              <h4 id="publicLightRunnerTitle">用公开证据回答一个 Light 探索问题</h4>
+              <p>Agent 只能从服务端候选和确定性工具中选择，不展示思维链。运行后只把结构化报告与审计轨迹保存到探索历史，不复制公开原始序列，也不计入真机门禁。</p>
+            </div>
+            <div class="public-light-form">
+              <label class="public-light-question"><span>你的 Light 探索问题</span><textarea id="publicLightQuestion" minlength="5" maxlength="800" placeholder="例如：手机 phyphox Light 能看到手划过时的照度变化吗？"></textarea><small>5–800 字；只回答公开数据实际能够支持的描述性问题。</small></label>
+              <label><span>查询照度（lx，可选）</span><input id="publicLightQueryLux" type="number" min="0" max="1000000000" step="0.01" placeholder="例如 100" /><small>用于自然场景分布查询；留空时由闭环自行选择证据。</small></label>
+              <label class="public-light-privacy"><input id="publicLightPrivacy" type="checkbox" /><span>我确认本次仅在本机运行，并理解部分公开光照序列可能保留行为节律；系统只保存报告与审计轨迹，不复制原始序列</span></label>
+              <button class="button button-primary" id="publicLightRunButton" type="button" disabled><span>运行公开 Light 闭环</span></button>
+            </div>
+            <div class="public-light-status" id="publicLightStatus" role="status">填写问题并完成本次本地隐私确认后即可运行。</div>
+            <section class="public-light-result" id="publicLightResult" hidden aria-live="polite">
+              <header class="public-light-result-heading">
+                <div><span>PUBLIC LIGHT REPORT</span><h4 id="publicLightReportTitle">公开回放结果</h4></div>
+                <div><b id="publicLightExecutionStatus">—</b><b id="publicLightPlannerStatus">—</b></div>
+              </header>
+              <p class="public-light-summary" id="publicLightReportSummary"></p>
+              <div class="public-light-gates" id="publicLightGates"></div>
+              <div class="public-light-result-grid">
+                <section><h5>Agent 选择轨迹</h5><div class="public-light-trace" id="publicLightPlannerTrace"></div></section>
+                <section><h5>确定性工具轨迹</h5><div class="public-light-trace" id="publicLightToolTrace"></div></section>
+              </div>
+              <section class="public-light-evidence-section"><h5>证据事实与来源</h5><div class="public-light-evidence" id="publicLightEvidence"></div></section>
+              <section class="public-light-findings-section"><h5>有证据支持的发现</h5><div class="public-light-findings" id="publicLightFindings"></div></section>
+              <div class="public-light-report-grid">
+                <section><h5>报告来源</h5><div id="publicLightSources"></div></section>
+                <section><h5>仍存在的不确定性</h5><ul id="publicLightUncertainties"></ul></section>
+                <section class="public-light-forbidden"><h5>不得扩大的结论</h5><ul id="publicLightForbiddenClaims"></ul></section>
+              </div>
+              <div class="public-light-next-live" id="publicLightNextLive" hidden><b>下一项真机测量</b><p></p></div>
+            </section>
+          </section>
+          <section class="public-light-runner public-pressure-runner" id="publicPressureRunner" hidden aria-labelledby="publicPressureRunnerTitle">
+            <div class="public-light-runner-intro">
+              <span class="surface-kicker">BOUNDED PRESSURE AGENT BETA</span>
+              <h4 id="publicPressureRunnerTitle">用公开手机 Pressure 证据探索楼层高度变化</h4>
+              <p>模型只选择服务端冻结的电梯、楼梯、真机请求或安全拒绝候选。NIST 稀疏高程只由服务端评测，绝不会进入 Planner；系统只保存报告与审计轨迹，不计入你的 phyphox 真机 Gate C。</p>
+            </div>
+            <div class="public-light-form public-pressure-form">
+              <label class="public-light-question"><span>你的 Pressure 探索问题</span><textarea id="publicPressureQuestion" minlength="5" maxlength="800" placeholder="例如：公开手机气压数据能否看见电梯上升一层的相对高度变化？"></textarea><small>5–800 字；绝对海拔、当前手机楼层和单因果请求会被安全限制或转入真机测量。</small></label>
+              <label class="public-light-privacy public-pressure-privacy"><input id="publicPressurePrivacy" type="checkbox" /><span>我确认本次仅在本机读取许可仍待进一步澄清的 NIST Pressure 回放；系统只保存报告与来源摘要</span></label>
+              <button class="button button-primary" id="publicPressureRunButton" type="button" disabled><span>运行公开 Pressure Agent Beta</span></button>
+            </div>
+            <div class="public-light-status" id="publicPressureStatus" role="status">填写问题并完成本次本地回放确认后即可运行。</div>
+            <section class="public-light-result" id="publicPressureResult" hidden aria-live="polite">
+              <header class="public-light-result-heading">
+                <div><span>PUBLIC PRESSURE REPORT</span><h4 id="publicPressureReportTitle">公开回放结果</h4></div>
+                <div><b id="publicPressureExecutionStatus">—</b><b id="publicPressurePlannerStatus">—</b></div>
+              </header>
+              <p class="public-light-summary" id="publicPressureReportSummary"></p>
+              <div class="public-light-gates" id="publicPressureGates"></div>
+              <div class="public-light-result-grid">
+                <section><h5>Agent 选择轨迹</h5><div class="public-light-trace" id="publicPressurePlannerTrace"></div></section>
+                <section><h5>确定性工具轨迹</h5><div class="public-light-trace" id="publicPressureToolTrace"></div></section>
+              </div>
+              <section class="public-light-evidence-section"><h5>压力证据、质量门与物理对照</h5><div class="public-light-evidence" id="publicPressureEvidence"></div></section>
+              <section class="public-light-findings-section"><h5>有证据支持的发现</h5><div class="public-light-findings" id="publicPressureFindings"></div></section>
+              <div class="public-light-report-grid">
+                <section><h5>报告来源</h5><div id="publicPressureSources"></div></section>
+                <section><h5>仍存在的不确定性</h5><ul id="publicPressureUncertainties"></ul></section>
+                <section class="public-light-forbidden"><h5>不得扩大的结论</h5><ul id="publicPressureForbiddenClaims"></ul></section>
+              </div>
+              <div class="public-light-next-live" id="publicPressureNextLive" hidden><b>下一项真机测量</b><p></p></div>
+            </section>
+          </section>
+          <section class="public-light-runner public-sensor-runner" id="publicSensorRunner" aria-labelledby="publicSensorRunnerTitle" hidden>
+            <div class="public-light-runner-intro">
+              <span class="surface-kicker">BOUNDED SENSOR AGENT BETA</span>
+              <h4 id="publicSensorRunnerTitle"><span id="publicSensorName">Gyroscope</span> 公开证据实验台</h4>
+              <p id="publicSensorIntro">模型只选择服务端冻结的证据路线；专用分析器、质量阈值、终止和报告仍由服务端控制。系统保存结构化报告与轨迹，但不复制公开原始序列，也不计入你的 phyphox 真机 Gate C。</p>
+            </div>
+            <div class="public-light-form public-sensor-form">
+              <label class="public-light-question"><span>你的 <b id="publicSensorQuestionLabel">Gyroscope</b> 探索问题</span><textarea id="publicSensorQuestion" minlength="5" maxlength="800" placeholder="例如：公开陀螺仪记录能否区分静止和手持转动？"></textarea><small id="publicSensorQuestionHelp">5–800 字；当前手机状态、精确转角和绝对姿态会转入真机测量或安全拒绝。</small></label>
+              <label class="public-light-privacy public-sensor-privacy"><input id="publicSensorPrivacy" type="checkbox" /><span>我确认本次仅在本机读取许可边界已标注的公开传感器回放；系统只保存报告与审计轨迹</span></label>
+              <button class="button button-primary" id="publicSensorRunButton" type="button" disabled><span>运行公开 Sensor Agent Beta</span></button>
+            </div>
+            <div class="public-light-status" id="publicSensorStatus" role="status">从下方 Agent Beta 案例卡打开对应实验。</div>
+            <section class="public-light-result" id="publicSensorResult" hidden aria-live="polite">
+              <header class="public-light-result-heading">
+                <div><span>PUBLIC SENSOR REPORT</span><h4 id="publicSensorReportTitle">公开回放结果</h4></div>
+                <div><b id="publicSensorExecutionStatus">—</b><b id="publicSensorPlannerStatus">—</b></div>
+              </header>
+              <p class="public-light-summary" id="publicSensorReportSummary"></p>
+              <div class="public-light-gates" id="publicSensorGates"></div>
+              <div class="public-light-result-grid">
+                <section><h5>Agent 选择轨迹</h5><div class="public-light-trace" id="publicSensorPlannerTrace"></div></section>
+                <section><h5>确定性工具轨迹</h5><div class="public-light-trace" id="publicSensorToolTrace"></div></section>
+              </div>
+              <section class="public-light-evidence-section"><h5>传感器证据与专用分析</h5><div class="public-light-evidence" id="publicSensorEvidence"></div></section>
+              <section class="public-sensor-comparison" id="publicSensorComparison" hidden><h5>跨条件质量对照</h5><div></div></section>
+              <section class="public-sensor-visual" id="publicSensorVisual" hidden><h5>派生证据可视化</h5><div></div><p>图中只展示服务端确定性分析指标，不展示或重建原始音频。</p></section>
+              <section class="public-light-findings-section"><h5>有证据支持的发现</h5><div class="public-light-findings" id="publicSensorFindings"></div></section>
+              <div class="public-light-report-grid">
+                <section><h5>报告来源</h5><div id="publicSensorSources"></div></section>
+                <section><h5>仍存在的不确定性</h5><ul id="publicSensorUncertainties"></ul></section>
+                <section class="public-light-forbidden"><h5>不得扩大的结论</h5><ul id="publicSensorForbiddenClaims"></ul></section>
+              </div>
+              <div class="public-light-next-live" id="publicSensorNextLive" hidden><b>下一项真机测量</b><p></p></div>
+            </section>
+          </section>
+          <details class="public-source-catalog">
+            <summary>高级信息 · 查看公开数据包与导入权限</summary>
+          <div class="public-replay-catalog-heading">
+            <span class="surface-kicker">SOURCE CATALOG & OPTIONAL IMPORT</span>
+            <h4>查看公开数据包及账号导入权限</h4>
+          </div>
+          <div class="public-replay-form">
+            <label><span>选择公开数据包</span><select id="publicReplayDataset"><option value="">正在读取公开数据目录…</option></select></label>
+            <label><span>选择数据记录</span><select id="publicReplayRecording" disabled><option value="">请先选择数据包</option></select></label>
+            <button class="button button-primary" id="publicReplayImportButton" type="button" disabled><span>导入当前账号并查看分析</span></button>
+          </div>
+          <div class="public-replay-status" id="publicReplayStatus" role="status">正在读取带来源证明的公开数据目录…</div>
+          <section class="public-replay-details" id="publicReplayDetails" hidden aria-live="polite"></section>
+          <p class="public-replay-boundary">公开回放记录会保留来源标签，并与 Light 距离协议的“绑定已有光照记录”严格隔离。</p>
+          </details>
+        </article>
+        </div>
+      </section>
+
+      <section class="app-page shell settings-section" id="settings" data-page="settings" hidden>
+        <div class="section-heading">
+          <div><span>01 / ACCOUNT, MODEL & PHONE</span><h2>先准备一次，之后直接实验</h2></div>
+          <p>账号隔离实验与设备记录；模型密钥保存在系统凭据库；手机地址保存在本机数据库。</p>
+        </div>
+        <article class="surface settings-surface settings-profile-surface">
+          <div class="settings-intro">
+            <span class="surface-kicker">LOCAL PROFILE</span>
+            <h3>你的实验工作区</h3>
+            <p>显示名称、案例、Session 和设备设置均归属于当前登录账号；其他账号无法读取或修改这些数据。</p>
+          </div>
+          <div class="settings-form">
+            <div class="settings-grid profile-settings">
+              <label><span>档案显示名称</span><input id="profileNameInput" maxlength="60" placeholder="例如：我的实验档案" /></label>
+              <button class="button button-quiet" id="saveProfileButton" type="button"><span>保存名称</span></button>
+            </div>
+          </div>
+        </article>
+
+        <article class="surface model-settings-surface" aria-labelledby="modelSettingsTitle">
+          <header class="settings-card-header">
+            <div>
+              <span class="surface-kicker">AI MODEL PROFILES</span>
+              <h3 id="modelSettingsTitle">模型与 API 接口</h3>
+              <p>可为当前账号保存多个 OpenAI-compatible 接口并随时切换。测试会发出少量真实请求，用来确认 Agent 所需能力。</p>
+            </div>
+            <button class="button button-secondary" id="newModelProfileButton" type="button"><span>新增配置</span></button>
+          </header>
+          <div class="model-security-banner">
+            <span aria-hidden="true">◆</span>
+            <div><b>API Key 不会写入项目文件或 PocketLab 数据库</b><small id="modelSecretBackend">完整密钥保存在操作系统凭据存储；页面只显示末四位。</small></div>
+          </div>
+          <div class="model-integration-banner">
+            <span aria-hidden="true">AI</span>
+            <div>
+              <b>当前已专门调配：DeepSeek V4 Flash 与 Pro</b>
+              <small>Flash 使用函数工具生成草案；Pro 使用严格校验的 JSON 草案，避免无效的长工具循环。其他 Chat Completions 模型仍可兼容试运行：请先测试能力；若首次达到轮次上限，可使用“提高轮数并重试基模”逐步验证。</small>
+            </div>
+          </div>
+          <div class="model-settings-layout">
+            <section class="model-profile-panel" aria-label="已保存的模型配置">
+              <div class="model-profile-list" id="modelProfileList"><p class="model-profile-empty">正在读取模型配置…</p></div>
+            </section>
+            <form class="model-profile-form" id="modelProfileForm">
+              <div class="model-form-heading"><div><b id="modelFormTitle">新增模型配置</b><small>修改接口或模型名后需要重新测试能力。</small></div><span id="modelFormMode">NEW</span></div>
+              <label><span>配置名称</span><input id="modelProfileName" maxlength="80" autocomplete="off" placeholder="例如：并行智算云 DeepSeek" required /></label>
+              <label><span>OpenAI-compatible Base URL</span><input id="modelBaseUrl" maxlength="500" inputmode="url" autocomplete="off" placeholder="https://provider.example/v1" required /></label>
+              <label><span>Model Name</span><input id="modelNameInput" maxlength="200" autocomplete="off" placeholder="provider/model-name" required /><small class="model-field-help">只接受能够调用 Chat Completions 的语言模型；图像生成、视频、Embedding 等模型不能作为 Agent 基模。</small></label>
+              <label><span>推理策略</span><select id="modelReasoningStrategy"><option value="auto">自动（推荐）</option><option value="fast">快速优先</option><option value="deep">深度分析优先</option></select><small class="model-reasoning-help">自动模式让路由、工具选择保持快速，把深度推理留给证据解释、竞争假设和最终报告；未知供应商不会收到私有参数。</small></label>
+              <label><span>API Key <i id="modelApiKeyHint">新配置必须填写；编辑时留空表示保持原密钥</i></span><span class="secret-input"><input id="modelApiKey" maxlength="4096" type="password" autocomplete="new-password" placeholder="只会发送到 PocketLab 后端" /><button id="modelApiKeyToggle" type="button" aria-label="显示 API Key" aria-pressed="false">显示</button></span></label>
+              <details class="model-cost-details">
+                <summary>可选：价格信息</summary>
+                <div class="model-cost-grid">
+                  <label><span>输入 / 百万 tokens</span><input id="modelInputCost" min="0" max="100000" step="0.0001" inputmode="decimal" placeholder="可留空" /></label>
+                  <label><span>输出 / 百万 tokens</span><input id="modelOutputCost" min="0" max="100000" step="0.0001" inputmode="decimal" placeholder="可留空" /></label>
+                </div>
+              </details>
+              <div class="model-save-status" id="modelSaveStatus" role="status">新增配置保存后会自动设为当前模型；请再运行能力测试。</div>
+              <div class="settings-actions">
+                <button class="button button-primary" id="saveModelProfileButton" type="submit"><span>安全保存配置</span></button>
+                <button class="button button-quiet" id="cancelModelEditButton" type="button" hidden><span>取消编辑</span></button>
+              </div>
+            </form>
+          </div>
+          <section class="agent-runtime-panel" aria-labelledby="agentRuntimeTitle">
+            <header><div><span class="surface-kicker">PRIVATE RUNTIME AUDIT</span><h4 id="agentRuntimeTitle">最近 Agent 运行</h4></div><button class="button button-quiet" id="refreshAgentRunsButton" type="button"><span>刷新审计</span></button></header>
+            <div class="agent-runtime-summary" id="agentRuntimeSummary"><p>正在读取运行状态…</p></div>
+            <div class="agent-runtime-list" id="agentRuntimeList"></div>
+            <p class="agent-runtime-boundary" id="agentRuntimeBoundary">只保存运行元数据，不保存提示词、回答、密钥或原始传感器数据。</p>
+          </section>
+        </article>
+
+        <article class="surface settings-surface device-settings-surface">
+          <div class="settings-intro">
+            <span class="surface-kicker">PHYPHOX PHONE BRIDGE</span>
+            <h3>默认测量手机</h3>
+            <p>保存后，诊断与探索任务会优先使用这台手机。模拟数据、公开回放与文件导入不依赖手机在线。</p>
+            <div class="device-overview" id="deviceOverview" data-state="idle">
+              <i></i><div><b>尚未设置默认手机</b><span>使用模拟或文件数据不受影响。</span></div>
+            </div>
+          </div>
+          <div class="settings-form">
+            <div class="settings-grid device-settings">
+              <label><span>设备名称</span><input id="deviceNameInput" maxlength="80" value="我的手机" /></label>
+              <label><span>phyphox 远程地址</span><input id="deviceUrlInput" inputmode="url" autocomplete="off" placeholder="http://192.168.1.42:8080" /></label>
+            </div>
+            <div class="device-save-status" id="deviceSaveStatus">请先在手机 phyphox 中打开任一实验并启用远程访问。</div>
+            <div class="settings-actions">
+              <button class="button button-primary" id="saveDeviceButton" type="button"><span>测试连接并保存</span></button>
+              <button class="button button-secondary" id="checkSavedDeviceButton" type="button" disabled><span>重新检测</span></button>
+              <button class="button button-quiet" id="removeDeviceButton" type="button" disabled><span>移除设备</span></button>
+            </div>
+            <p class="settings-note">地址只保存在 PocketLab 后端，不会交给模型。保存成功后，新实验会自动选择这台手机。</p>
+          </div>
+        </article>
+      </section>
+
+      <section class="app-page shell workflow-section" id="workflow" data-page="cases" hidden>
+        <div class="section-heading">
+          <div><span>02 / GUIDED EXPERIMENT</span><h2>一条连续的诊断流程</h2></div>
+          <p>Session 仍会由系统保存，但主流程不再要求你理解“创建、选中、绑定”三个内部步骤。</p>
+        </div>
+
+        <article class="surface case-setup" id="caseSetup">
+          <div class="setup-intro">
+            <span class="step-number">STEP 01</span>
+            <h3>描述你真实观察到的现象</h3>
+            <p>写清发生条件和想区分的原因。Agent 不会直接猜答案，而会建立 2–3 个可以被实验区分的候选假设。</p>
+          </div>
+          <div class="setup-form">
+            <label><span>案例名称</span><input id="caseTitleInput" maxlength="80" placeholder="例如：洗衣机脱水时地面振动" /></label>
+            <label><span>问题描述</span><textarea id="problemInput" maxlength="1000" rows="4" placeholder="描述何时发生、观察到什么，以及希望区分哪些可能原因。"></textarea></label>
+            <label><span>现场条件 <i>选填</i></span><textarea id="caseContextInput" maxlength="1000" rows="3" placeholder="设备状态、手机准备放在哪里、环境条件等"></textarea></label>
+            <button class="button button-primary" id="createDiagnosticButton" type="button"><span>让 Agent 规划第一项实验</span></button>
+          </div>
+        </article>
+
+        <article class="surface active-workflow" id="activeWorkflow" hidden>
+          <header class="case-header">
+            <div><span class="surface-kicker">ACTIVE DIAGNOSTIC CASE</span><h3 id="diagnosticCaseTitle">—</h3></div>
+            <div class="case-meta"><span id="diagnosticCaseId">—</span><button id="newCaseButton" type="button">建立新案例</button></div>
+          </header>
+          <div class="diagnostic-runtime-notice" id="diagnosticRuntimeNotice" role="status" hidden></div>
+
+          <div class="workflow-block">
+            <div class="block-title"><span>1</span><div><b>当前候选假设</b><small>证据会逐轮增强、削弱或保持未决</small></div></div>
+            <div class="hypothesis-list" id="hypothesisList"></div>
+          </div>
+
+          <details class="reality-feedback" id="diagnosticRealityFeedback">
+            <summary>这些解释或步骤不符合你家的实际情况？</summary>
+            <p>你不需要懂物理术语。直接说明“家里有什么、没有什么、哪一步做不了”。PocketLab 会保留旧测量，并创建一份服从新现场事实的计划。</p>
+            <label><span>哪里不符合实际</span><select id="diagnosticFeedbackType"><option value="environment_fact">补充一个现场事实</option><option value="hypothesis_needs_correction">某条解释只有一部分不对</option><option value="hypothesis_not_applicable">某条解释在我家完全不可能</option><option value="task_not_feasible">这一步在我家做不了</option><option value="instruction_unclear">我没看懂怎样操作</option></select></label>
+            <div class="reality-feedback-selection" id="diagnosticFeedbackSelection">尚未指定某条解释；你也可以只补充现场情况。</div>
+            <label><span>请用自己的话说明</span><textarea id="diagnosticFeedbackMessage" maxlength="800" rows="3" placeholder="例如：我家厕所没有水箱，只有墙内管道；手机无法放到 Agent 建议的位置。"></textarea></label>
+            <label class="reality-feedback-privacy"><input id="diagnosticFeedbackPrivacy" type="checkbox" /><span>如果旧记录含麦克风或位置数据，我同意仅把经过筛选的数值事实用于重新规划</span></label>
+            <button class="button button-secondary" id="diagnosticFeedbackSubmit" type="button">保存现场事实并重新规划</button>
+            <div class="reality-feedback-status" id="diagnosticFeedbackStatus" role="status"></div>
+          </details>
+
+          <div class="workflow-block task-block">
+            <div class="block-title"><span>2</span><div><b>当前唯一任务</b><small>先按任务测量，不需要手工创建 Session</small></div></div>
+            <div class="current-task" id="currentTask"></div>
+            <div class="termination-progress" id="terminationProgress"></div>
+          </div>
+
+          <div class="workflow-block final-report-block" id="finalReportBlock" hidden>
+            <div class="block-title"><span>✓</span><div><b>最终诊断报告</b><small>终止向量已达到结束区域，不再生成新任务</small></div></div>
+            <div class="final-report-card">
+              <div class="final-report-lead">
+                <span id="finalOutcomeBadge">—</span>
+                <h4 id="finalConclusion">—</h4>
+                <p class="final-user-takeaway" id="finalUserTakeaway"></p>
+                <p class="final-mechanism" id="finalMechanismExplanation"></p>
+                <p class="final-confidence" id="finalConfidenceExplanation"></p>
+                <p id="finalTerminationReason">—</p>
+              </div>
+              <div class="final-evidence-story">
+                <b>这份判断具体依据什么</b>
+                <ul id="finalEvidenceExplanation"></ul>
+              </div>
+              <div class="termination-grid" id="terminationGrid"></div>
+              <div class="solution-plan" id="finalSolutionPlan" hidden>
+                <div class="solution-heading">
+                  <div><span>SOLUTION PATH</span><b>建议怎样处理</b></div>
+                  <small id="solutionBasisBadge">—</small>
+                </div>
+                <div class="solution-provenance" id="solutionProvenance">
+                  <div><b id="solutionProvenanceBadge">—</b><span id="solutionProvenanceNote">—</span></div>
+                  <button class="button button-secondary" id="retryFinalReportButton" type="button" hidden>重新请求完整基模报告</button>
+                </div>
+                <p id="solutionSummary">—</p>
+                <div class="solution-actions" id="solutionActions"></div>
+                <div class="solution-escalation">
+                  <b>停止自行处理并升级的条件</b>
+                  <ul id="solutionEscalation"></ul>
+                </div>
+                <div class="optional-retest" id="optionalRetest" hidden>
+                  <div><span>OPTIONAL RETEST</span><b id="optionalRetestTitle">可选复测</b></div>
+                  <p id="optionalRetestInstruction">—</p>
+                  <ul id="optionalRetestCriteria"></ul>
+                  <button class="button button-secondary" id="copyRetestButton" type="button">创建可执行复测诊断</button>
+                  <small>将建立一个独立的新诊断并由 Agent 重新规划测量；原案例与报告会完整保留。</small>
+                </div>
+              </div>
+              <div class="final-uncertainties">
+                <b>仍需保留的边界与不确定性</b>
+                <ul id="finalUncertainties"></ul>
+                <p id="finalScopeBoundary"></p>
+              </div>
+            </div>
+          </div>
+
+          <div class="workflow-block measure-block" id="measureBlock">
+            <div class="block-title"><span>3</span><div><b>完成本次测量</b><small>选择一种数据来源，提交后自动分析并绑定到当前任务</small></div></div>
+            <div class="measurement-source" role="tablist" aria-label="测量数据来源">
+              <button class="source-choice active" type="button" data-mode="public"><b>公开回放</b><small>已审阅来源 · 非本机证据</small></button>
+              <button class="source-choice" type="button" data-mode="simulation"><b>合成演练</b><small>仅加速度软件验收</small></button>
+              <button class="source-choice" type="button" data-mode="file"><b>导入文件</b><small>CSV 或 JSON 实测数据</small></button>
+              <button class="source-choice" type="button" data-mode="mobile"><b>手机采集</b><small>通过 Case ID 直连任务</small></button>
+            </div>
+            <div class="task-analyzer-notice" id="taskAnalyzerNotice" hidden></div>
+
+            <div class="source-pane diagnostic-public-pane" id="publicDiagnosticPane">
+              <div>
+                <span>REVIEWED PUBLIC REPLAY</span>
+                <b id="publicDiagnosticTitle">按当前传感器选择公开记录</b>
+                <p id="publicDiagnosticBoundary">用于检验分析器、证据事实和 Agent 决策闭环；不会声称是你家或你手机的测量。</p>
+              </div>
+              <label class="diagnostic-public-privacy"><input id="publicDiagnosticPrivacy" type="checkbox" /><span>若数据包涉及行为节律、声音派生量或位置，我确认仅在本机运行并理解其来源边界。</span></label>
+              <button class="button button-primary" id="publicDiagnosticRunButton" type="button"><span>运行公开回放并交给 Agent</span></button>
+              <button class="button button-secondary diagnostic-retry-button" id="diagnosticRetryButton" type="button" hidden><span>重试刚才已保存的记录</span></button>
+            </div>
+
+            <div class="source-pane" id="simulationPane" hidden>
+              <label class="simulation-picker">
+                <span>选择与案例匹配的模拟测量</span>
+                <select id="simulationProfile"></select>
+              </label>
+              <div class="source-explainer">
+                <b id="simulationProfileTitle">—</b>
+                <p id="simulationProfileDescription">只验证软件闭环，不代表当前物理问题的真实测量结果。</p>
+                <div class="simulation-tags" id="simulationProfileTags"></div>
+              </div>
+            </div>
+            <div class="source-pane" id="filePane" hidden>
+              <input id="taskFileInput" type="file" accept=".csv,.json,text/csv,application/json" hidden />
+              <button class="file-drop" id="taskFileButton" type="button"><b id="taskFileTitle">选择或拖入测量文件</b><span id="taskFileMeta">至少 64 个采样点，包含时间、x、y、z</span></button>
+            </div>
+            <div class="source-pane mobile-bridge" id="mobilePane" hidden>
+              <div><span>后端地址</span><code id="mobileServerUrl">—</code></div>
+              <div><span>案例编号</span><code id="mobileCaseCode">—</code></div>
+              <div><span>任务编号</span><code id="mobileTaskCode">—</code></div>
+              <p class="mobile-intro" id="mobileSensorIntro">手机安装 <a href="https://phyphox.org/download/" target="_blank" rel="noreferrer">phyphox</a>，打开与当前 Task 匹配的实验并启用远程访问。</p>
+              <div class="workflow-device" id="workflowDeviceStatus"><b>未选择默认设备</b><span>可以在上方设备设置中保存一次，或在这里临时填写。</span></div>
+              <label class="mobile-url-field">
+                <span>phyphox 远程地址</span>
+                <input id="phyphoxBaseUrl" inputmode="url" autocomplete="off" placeholder="http://192.168.1.42:8080" />
+                <small>默认从设备设置读取；手机换网后可在这里输入新地址，检测成功后再到设置中保存。</small>
+              </label>
+              <label>
+                <span>采集时长（秒）</span>
+                <input id="phyphoxDuration" type="number" min="3" max="60" step="1" value="5" />
+              </label>
+              <label>
+                <span>本次测量名称</span>
+                <input id="phyphoxLabel" maxlength="80" />
+              </label>
+              <label class="mobile-observation-field">
+                <span>现场观察 <i>选填</i></span>
+                <textarea id="phyphoxObservation" maxlength="500" rows="2" placeholder="例如：手机固定在洗衣机前方地面，脱水转速保持不变。"></textarea>
+              </label>
+              <label class="mobile-privacy-confirm" id="mobilePrivacyConfirm" hidden><input id="mobilePrivacyCheckbox" type="checkbox" /><span>我理解声音仅上传派生量、位置属于敏感数据，并同意本次本机分析。</span></label>
+              <div class="phyphox-status" id="phyphoxStatus" data-state="idle">
+                <b>等待连接真机</b>
+                <span>先在 phyphox 中开启远程访问，再填写它显示的地址。</span>
+              </div>
+              <div class="mobile-actions">
+                <button class="button button-secondary" id="probePhyphoxButton" type="button"><span>检测手机连接</span></button>
+                <button class="button button-primary" id="capturePhyphoxButton" type="button" disabled><span>采集并交给 Agent</span></button>
+                <button class="button button-quiet" id="refreshTaskButton" type="button">刷新任务状态</button>
+              </div>
+            </div>
+
+            <div class="measurement-form" id="measurementForm">
+              <label><span>本次测量名称</span><input id="measurementLabelInput" maxlength="80" /></label>
+              <label><span>现场观察 <i>选填</i></span><textarea id="observationInput" maxlength="500" rows="3" placeholder="例如：脱水开始后约 10 秒，地面振感逐渐增强。"></textarea></label>
+              <button class="button button-primary submit-measurement" id="submitTaskButton" type="button"><span>分析并提交本次测量</span></button>
+            </div>
+          </div>
+
+          <div class="workflow-block result-block" id="latestResult" hidden>
+            <div class="block-title"><span>4</span><div><b>本轮分析结果</b><small>确定性算法先计算，Agent 再更新假设</small></div></div>
+            <div class="result-layout">
+              <div class="metrics-row">
+                <div><span id="metricOneLabel">主频</span><b id="metricFrequency">—</b><small id="metricOneUnit">Hz</small></div>
+                <div><span id="metricTwoLabel">RMS</span><b id="metricRms">—</b><small id="metricTwoUnit">m/s²</small></div>
+                <div><span id="metricThreeLabel">采样率</span><b id="metricRate">—</b><small id="metricBand">Hz</small></div>
+                <div><span>证据质量</span><b id="metricConfidence">—</b><small id="metricWarning">WAITING</small></div>
+              </div>
+              <div class="chart-wrap"><canvas id="signalChart" aria-label="三轴加速度波形"></canvas><div id="chartEmpty">等待测量数据</div></div>
+            </div>
+            <div class="agent-summary"><span>AGENT UPDATE</span><div id="diagnosticAgentMessage">—</div></div>
+          </div>
+        </article>
+      </section>
+
+      <section class="app-page shell secondary-section" id="history" data-page="history" hidden>
+        <div class="section-heading compact">
+          <div><span>03 / PERSISTENT HISTORY</span><h2>问题与实验历史</h2></div>
+          <p>问题解决和探索实验分别归档；未完成任务可以继续，已结束结果可以复查，测量记录作为两者共享的证据资产。</p>
+        </div>
+        <article class="surface history-surface history-hub">
+          <details class="history-module" id="diagnosticHistoryModule">
+            <summary>
+              <span class="history-module-index">01</span>
+              <span class="history-module-heading"><span class="surface-kicker">DIAGNOSTIC CASES</span><b>诊断案例</b><small>问题解决流程、当前任务与最终报告</small></span>
+              <span class="history-module-count"><strong id="caseHistoryCount">0</strong><small>条记录</small></span>
+              <span class="history-module-chevron" aria-hidden="true"></span>
+            </summary>
+            <div class="history-module-body">
+              <div class="history-empty" id="caseHistoryEmpty"><b>还没有诊断案例</b><p>建立第一个问题后，会自动出现在这里。</p></div>
+              <div class="case-history-list" id="caseHistoryList"></div>
+            </div>
+          </details>
+          <details class="history-module" id="explorationHistoryModule">
+            <summary>
+              <span class="history-module-index">02</span>
+              <span class="history-module-heading"><span class="surface-kicker">EXPLORATION EXPERIMENTS</span><b>探索实验</b><small>预设实验、模拟演练、公开数据与真机实验</small></span>
+              <span class="history-module-count"><strong id="explorationHistoryCount">0</strong><small>条记录</small></span>
+              <span class="history-module-chevron" aria-hidden="true"></span>
+            </summary>
+            <div class="history-module-body">
+              <div class="history-empty" id="explorationHistoryEmpty"><b>还没有探索实验</b><p>运行一次探索实验后，报告或进行中状态会自动出现在这里。</p></div>
+              <div class="exploration-history-list" id="explorationHistoryList"></div>
+            </div>
+          </details>
+          <details class="history-module" id="measurementHistoryModule">
+            <summary>
+              <span class="history-module-index">03</span>
+              <span class="history-module-heading"><span class="surface-kicker">SHARED EVIDENCE</span><b>测量记录</b><small>问题解决与探索实验共享的证据资产</small></span>
+              <span class="history-module-count"><strong id="sessionHistoryCount">0</strong><small>条记录</small></span>
+              <span class="history-module-chevron" aria-hidden="true"></span>
+            </summary>
+            <div class="history-module-body">
+              <div class="history-empty" id="sessionEmpty"><b>还没有测量记录</b><p>完成当前任务后，系统会自动在这里保存 Session。</p></div>
+              <div class="session-list" id="sessionList"></div>
+            </div>
+          </details>
+        </article>
+      </section>
+
+      <section class="app-page shell secondary-section" id="advanced" data-page="advanced" hidden>
+        <div class="section-heading compact">
+          <div><span>04 / EVIDENCE WORKBENCH</span><h2>证据工作台</h2></div>
+          <p>把已有测量变成可审计、可对照、可追问和可导出的证据报告；不会修改原诊断或探索结论。</p>
+        </div>
+        <article class="surface advanced-surface">
+          <div class="advanced-compose">
+            <span class="surface-kicker">EVIDENCE LIBRARY</span>
+            <div class="evidence-workbench-library" id="evidenceWorkbenchLibrary"><p>正在读取账号内的测量证据…</p></div>
+            <span class="surface-kicker">SELECTED EVIDENCE · 最多 4 条</span>
+            <div class="selected-evidence" id="selectedSessionChips">尚未选择测量</div>
+            <textarea id="questionInput" rows="5">请解释选中证据分别测量了什么、哪些差异可靠、当前最合理的物理解释是什么，以及下一步怎样安全验证。</textarea>
+            <button class="button button-primary" id="runAgentButton" type="button" disabled><span>审计并解释选中证据</span></button>
+            <section class="workbench-report-history-section">
+              <div class="workbench-subheading"><b>最近的证据报告</b><small>点击可恢复，报告不会改写原记录</small></div>
+              <div class="workbench-report-history" id="workbenchReportHistory"><p>还没有保存的证据报告。</p></div>
+            </section>
+          </div>
+          <div class="advanced-output">
+            <header><span class="surface-kicker">EVIDENCE-BOUND NOTE</span><span class="model-badge" id="modelBadge">MODEL READY</span></header>
+            <div id="agentPlaceholder"><b>等待证据解释问题</b><p>这里支持加速度、角速度、磁场、光照、气压、接近、声音和位置记录；只解释已有证据，不替代诊断流程。</p></div>
+            <div class="agent-response workbench-report" id="agentResponse" hidden>
+              <div class="workbench-report-head"><div><span id="workbenchAnalysisStatus">—</span><h3 id="workbenchReportQuestion">—</h3></div><strong id="workbenchReportConfidence">—</strong></div>
+              <div class="workbench-quality-grid" id="workbenchQuality"></div>
+              <section class="workbench-report-section"><div class="workbench-subheading"><b>逐条证据审计</b><small>来源、分析器、质量与注册指标</small></div><div class="workbench-audit-list" id="workbenchAudits"></div></section>
+              <section class="workbench-report-section"><div class="workbench-subheading"><b>可比性与指标对照</b><small>只比较同物理量、同指标、同单位</small></div><div class="workbench-comparability" id="workbenchComparability"></div><div class="workbench-matrix" id="workbenchMatrix"></div><div class="workbench-contrast-table" id="workbenchContrasts"></div></section>
+              <section class="workbench-report-section"><div class="workbench-subheading"><b>条件对照图</b><small>图表只使用通过可比性门禁的注册指标</small></div><div class="workbench-charts" id="workbenchCharts"></div></section>
+              <section class="workbench-report-section agent-interpretation"><div class="workbench-subheading"><b>Agent 物理解释</b><small>受上方确定性审计约束</small></div><div id="workbenchAnswer"></div></section>
+              <section class="workbench-report-section boundary-section"><div class="workbench-subheading"><b>证据边界</b><small>不会被模型覆盖</small></div><ul id="workbenchBoundaries"></ul></section>
+              <section class="workbench-report-section workbench-note-section"><div class="workbench-subheading"><b>实验者注释</b><small>随本报告保存，不修改原始证据</small></div><textarea id="workbenchUserNote" maxlength="2000" rows="3" placeholder="记录你的判断、复测条件或交接信息"></textarea><div class="settings-actions"><button class="button button-secondary" id="saveWorkbenchNoteButton" type="button"><span>保存注释</span></button><button class="button button-quiet" id="exportWorkbenchButton" type="button"><span>导出 Markdown 报告</span></button></div></section>
+            </div>
+          </div>
+        </article>
+      </section>
+      </main>
+    </div>
+
+    <nav class="mobile-nav" aria-label="手机端主导航">
+      <a href="/app" data-route-link data-nav="dashboard"><span>⌂</span><b>工作台</b></a>
+      <a href="/app/cases/new" data-route-link data-nav="cases"><span>＋</span><b>新建</b></a>
+      <a href="/app/explore" data-route-link data-nav="explore"><span>◇</span><b>探索</b></a>
+      <a href="/app/history" data-route-link data-nav="history"><span>◷</span><b>历史</b></a>
+      <a href="/app/advanced" data-route-link data-nav="advanced"><span>⌁</span><b>证据</b></a>
+      <a href="/app/settings" data-route-link data-nav="settings"><span>⚙</span><b>设置</b></a>
+    </nav>
+    <aside class="model-run-panel" id="modelRunPanel" aria-live="polite" hidden>
+      <div class="model-run-orbit" aria-hidden="true"><span></span></div>
+      <div class="model-run-copy">
+        <span id="modelRunEyebrow">MODEL CONNECTION</span>
+        <b id="modelRunTitle">正在连接基模</b>
+        <p id="modelRunDetail">PocketLab 正在等待模型服务响应，不会在短时间后自动截断。</p>
+        <small id="modelRunElapsed">已等待 0 秒</small>
+      </div>
+      <div class="model-run-decision" id="modelRunDecision" hidden>
+        <p id="modelRunDecisionText">本次等待已超过 2 分钟。你可以让基模继续深度思考，或主动停止并使用明确标记的安全兜底。</p>
+        <div>
+          <button class="button button-secondary" id="modelRunContinueButton" type="button">继续等待基模</button>
+          <button class="button button-quiet" id="modelRunFallbackButton" type="button">立即使用安全兜底</button>
+        </div>
+      </div>
+    </aside>
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  </body>
+</html>

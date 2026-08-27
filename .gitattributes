@@ -1,0 +1,14 @@
+# Git hooks run through a POSIX shell, including when GitHub Desktop is used on Windows.
+* text=auto
+.githooks/* text eol=lf
+*.sh text eol=lf
+*.py text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.csv text eol=lf
+*.txt text eol=lf
+datasets/public/**/LICENSE text eol=lf
+*.gz binary
+*.xls binary
+*.xlsx binary
+*.pdf binary

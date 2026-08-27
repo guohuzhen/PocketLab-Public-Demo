@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="登录 PocketLab，继续你的物理诊断实验。" />
+    <title>登录 · PocketLab</title>
+    <link rel="stylesheet" href="/assets/login.css?v=20260814b" />
+    <script src="/assets/auth.js?v=20260814b" defer></script>
+  </head>
+  <body>
+    <div class="ambient ambient-one" aria-hidden="true"></div>
+    <div class="ambient ambient-two" aria-hidden="true"></div>
+    <main class="login-shell">
+      <section class="login-story">
+        <a class="brand" href="/" aria-label="PocketLab 首页">
+          <span class="brand-mark"><svg viewBox="0 0 32 32"><path d="M6 17h4l2.5-7 5 14 3-9 2 5H26" /></svg></span>
+          <span><strong>PocketLab</strong><small>PHYSICAL AGENT</small></span>
+        </a>
+        <div class="story-copy">
+          <span class="eyebrow">YOUR EVIDENCE WORKSPACE</span>
+          <h1>把物理现象，变成<br /><em>可以验证的证据。</em></h1>
+          <p>登录后，案例、测量记录、手机地址和个人设置会分别保存在你的账号空间中。</p>
+        </div>
+        <ol class="story-flow">
+          <li><b>01</b><span>提出可区分的假设</span></li>
+          <li><b>02</b><span>用手机或文件完成测量</span></li>
+          <li><b>03</b><span>让终止向量决定继续或结论</span></li>
+        </ol>
+      </section>
+
+      <section class="auth-panel" aria-labelledby="authTitle">
+        <div class="auth-heading"><span>POCKETLAB ACCOUNT</span><h2 id="authTitle">欢迎回来</h2><p id="authSubtitle">登录后继续上次的实验。</p></div>
+        <div class="auth-tabs" role="tablist" aria-label="账号操作">
+          <button class="active" id="loginTab" type="button" role="tab" aria-selected="true">登录</button>
+          <button id="registerTab" type="button" role="tab" aria-selected="false">创建账号</button>
+        </div>
+
+        <form id="loginForm">
+          <label><span>用户名</span><input id="loginUsername" name="username" autocomplete="username" required /></label>
+          <label><span>密码</span><div class="password-field"><input id="loginPassword" name="password" type="password" autocomplete="current-password" required /><button class="password-toggle" type="button" data-password-target="loginPassword" aria-label="显示密码" aria-pressed="false" title="显示密码"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.3-5.5 9.5-5.5 9.5 5.5 9.5 5.5-3.3 5.5-9.5 5.5S2.5 12 2.5 12Z" /><circle cx="12" cy="12" r="2.5" /><path class="eye-slash" d="M4 4l16 16" /></svg></button></div></label>
+          <button class="primary-button" id="loginSubmit" type="submit">进入工作区</button>
+        </form>
+
+        <form id="registerForm" hidden>
+          <label><span>用户名</span><input id="registerUsername" name="username" minlength="3" maxlength="32" autocomplete="username" placeholder="字母、数字、._-" required /></label>
+          <label><span>显示名称 <i>选填</i></span><input id="registerDisplayName" name="display_name" maxlength="60" autocomplete="name" placeholder="例如：李同学" /></label>
+          <label><span>密码</span><div class="password-field"><input id="registerPassword" name="password" type="password" minlength="8" maxlength="128" autocomplete="new-password" required /><button class="password-toggle" type="button" data-password-target="registerPassword" aria-label="显示密码" aria-pressed="false" title="显示密码"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.3-5.5 9.5-5.5 9.5 5.5 9.5 5.5-3.3 5.5-9.5 5.5S2.5 12 2.5 12Z" /><circle cx="12" cy="12" r="2.5" /><path class="eye-slash" d="M4 4l16 16" /></svg></button></div><small>至少 8 个字符，密码只以 Argon2 哈希保存。</small></label>
+          <label class="claim-option" id="claimOption" hidden><input id="claimLocalData" type="checkbox" checked /><span><b>接管此前的本地实验数据</b><small>只可由一个账号执行一次，旧案例不会丢失。</small></span></label>
+          <button class="primary-button" id="registerSubmit" type="submit">创建并进入工作区</button>
+        </form>
+        <div class="auth-message" id="authMessage" role="status" aria-live="polite"></div>
+        <p class="privacy-note">当前账号系统部署在你的 PocketLab 后端中。请勿把数据库文件或登录 Cookie 公开分享。</p>
+      </section>
+    </main>
+  </body>
+</html>

@@ -1,0 +1,38 @@
+[project]
+name = "pocketlab-agent"
+version = "0.1.0"
+description = "HarmonyOS phone-sensor experiment agent MVP"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.116,<1",
+  "httpx[socks]>=0.28,<1",
+  "keyring>=25,<26",
+  "numpy>=2.0,<3",
+  "openai-agents>=0.2,<1",
+  "pwdlib[argon2]>=0.3.1",
+  "pydantic>=2.11,<3",
+  "python-dotenv>=1.1,<2",
+  "uvicorn[standard]>=0.35,<1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["pocketlab"]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.4,<9",
+  "ruff>=0.12,<1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

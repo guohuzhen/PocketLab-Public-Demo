@@ -67,16 +67,32 @@ uv run python main.py
 
 ## 5. 可选真机路径
 
-如需连接 phyphox：
+### 5.1 安装 phyphox
 
-1. 手机和电脑连接同一个可信 Wi-Fi 或个人热点。
-2. 在 phyphox 打开当前任务要求的官方实验。
-3. 短时启用远程访问。
-4. 在 PocketLab 设备设置中填写手机显示的私有局域网地址。
-5. 测试连接，确认实验与传感器匹配后再采集。
-6. 完成后立即关闭 phyphox 远程访问。
+请使用稳定版并从官方入口安装：
 
-不要在公共 Wi-Fi 中使用，不要把手机地址、API Key 或家庭位置截图提交到公开 Issue。
+- **iPhone / iPad**：打开 [phyphox 官方下载页](https://phyphox.org/download/)，点击 App Store 入口安装。
+- **可使用 Google Play 的 Android**：从同一官方下载页进入 Google Play 安装。
+- **无 Google Play 的 Android**：这在部分国产手机环境中较常见。打开 [F-Droid 的 phyphox 条目](https://f-droid.org/en/packages/de.rwth_aachen.phyphox/)，优先按页面建议安装 F-Droid 官方客户端；刷新软件源后搜索 `phyphox`，核对包名为 `de.rwth_aachen.phyphox`、作者为 RWTH Aachen University，再安装。
+
+F-Droid 页面也提供直接 APK，但官方提示这种方式没有正常的更新通知，安全性也低于使用 F-Droid 客户端，因此只建议在客户端路径不可用时备用。Android 如提示“安装未知应用”，只对从 [F-Droid 官方网站](https://f-droid.org/) 获取的安装器临时授权，安装完成后按自己的更新需求复核或撤销该权限；不要使用第三方 APK 镜像站。
+
+### 5.2 连接 PocketLab
+
+1. 手机与运行 PocketLab 的电脑连接同一个可信 Wi-Fi 或个人热点。
+2. 在 phyphox 中打开当前任务要求的实验。加速度任务推荐“加速度（不含重力）”或“加速度”；其他任务按 PocketLab 当前任务卡显示的传感器要求选择。
+3. 进入该实验的菜单，启用“远程访问 / Remote access”，并记录手机显示的完整地址。Android 常见形式为 `http://192.168.x.x:8080`；iOS 通常使用 80 端口，可能不显示端口号。
+4. 可先在电脑浏览器中打开该地址：如果能看到 phyphox 远程页面，说明局域网链路正常。
+5. 在 PocketLab 打开“设备与设置”，填写设备名称和上述完整地址，保存并执行连接检测。
+6. 确认 PocketLab 显示的实验名称、输入能力与当前任务传感器匹配，再开始采集。采集期间保持 phyphox 实验打开，并避免手机锁屏或切换实验。
+7. 实验完成后立即在 phyphox 中关闭远程访问。
+
+### 5.3 连接失败与安全边界
+
+- 电脑浏览器也打不开地址：检查两台设备是否在同一网络；校园或公共 Wi-Fi 可能启用客户端隔离，建议换成可信个人热点。
+- 浏览器能打开但 PocketLab 提示实验不匹配：在手机切换到任务要求的实验，然后回到 PocketLab 重新检测。
+- phyphox 远程接口没有密码和加密，只应在可信局域网中短时启用；不要把手机地址、API Key、含家庭位置的信息或相关截图提交到公开 Issue。
+- PocketLab 只接受私有局域网 IP 以及 phyphox 使用的 80/8080 端口，并且不会把手机地址发送给模型。
 
 ## 6. 本地自检
 

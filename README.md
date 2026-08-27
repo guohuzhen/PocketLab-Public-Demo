@@ -81,7 +81,15 @@ uv run python main.py
 
 ## 关于 phyphox
 
-真机采集是可选路径。手机与电脑必须位于同一可信局域网；phyphox 远程接口没有密码和加密，使用后应立即关闭。PocketLab 只接受 IP 形式的私有局域网地址以及 80/8080 端口，不会把手机地址发送给模型。
+真机采集是可选路径，phyphox 安装请只走官方入口：
+
+- iPhone / iPad：从 [phyphox 官方下载页](https://phyphox.org/download/) 跳转到 Apple App Store 安装稳定版。
+- 可使用 Google Play 的 Android：从同一官方下载页跳转到 Google Play。
+- 无 Google Play 的 Android（包括部分国产手机环境）：使用 [F-Droid 中的 phyphox 官方条目](https://f-droid.org/en/packages/de.rwth_aachen.phyphox/)。F-Droid 建议先安装其官方客户端，再搜索 `phyphox`（包名 `de.rwth_aachen.phyphox`）；直接下载 APK 仅作为备用路径，因为不会获得正常的更新通知。不要从第三方 APK 镜像站下载。
+
+安装后，把手机与运行 PocketLab 的电脑连接到同一个可信 Wi-Fi 或个人热点。在 phyphox 中打开任务要求的实验，例如加速度任务使用“加速度（不含重力）”或“加速度”，然后在实验菜单中启用“远程访问 / Remote access”。将手机显示的完整 `http://` 私有局域网地址填入 PocketLab 的“设备与设置”，保存并测试连接；采集期间保持实验打开，完成后立即关闭远程访问。
+
+phyphox 远程接口没有密码和加密，不应在公共 Wi-Fi 中启用。若电脑浏览器也无法打开手机显示的地址，通常是设备不在同一网络或网络启用了客户端隔离，可改用可信个人热点。PocketLab 只接受 IP 形式的私有局域网地址以及 80/8080 端口，不会把手机地址发送给模型。完整操作与排错见 [QUICKSTART.md](QUICKSTART.md#5-可选真机路径)。
 
 ## 公开版范围
 

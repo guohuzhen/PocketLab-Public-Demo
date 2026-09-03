@@ -2,7 +2,7 @@
 
 ## Snapshot identity
 
-- Private source commit: `a308375`
+- Private source commit: `2a7e677`
 - Export type: clean file snapshot with a new Git root
 - Public history inherited from private repository: no
 - Mobile client included: no
@@ -21,6 +21,7 @@
 - Dependency lockfile and environment template
 - Git safety scanner and pre-commit hook
 - Public-only README, quickstart, security notice and smoke test
+- Playwright browser acceptance, GitHub Actions candidate gate and reviewed product visuals
 
 ## Excluded
 
@@ -31,9 +32,12 @@
 - `datasets/public` replay packs, including license-unresolved local-only packs
 - Holdout Evals, adversarial prompts, scoring thresholds and raw model outputs
 - Internal Harness implementations and development loop notes
+- Live-provider stability matrix inputs, raw outputs and machine-readable result files
 - HarmonyOS client skeleton
 - Competition submission forms, scripts and personal contact details
 
 ## Functional boundary
 
 The public snapshot is designed to start locally and demonstrate the Web product, account isolation, two zero-wait evidence chains, protocol creation and optional model-backed diagnostic/Exploration flows. Users must supply their own compatible model credentials only for real model operations. Third-party dataset-backed replay cards are intentionally unavailable; the bundled showcase records are server-generated, explicitly non-physical fixtures.
+
+The browser acceptance and included screenshots prove the checked-in Web journey and persistence behavior. They do not claim that a reviewer has connected a current physical phone; real phyphox evidence must remain separately attributable to an actual reachable device.

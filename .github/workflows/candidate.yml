@@ -1,0 +1,40 @@
+name: Public Candidate Gates
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  public-candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          python-version: "3.11"
+          enable-cache: true
+
+      - name: Sync locked dependencies
+        run: uv sync --frozen
+
+      - name: Reject tracked secrets and local runtime files
+        run: uv run python scripts/check_git_safety.py --tracked
+
+      - name: Lint public snapshot
+        run: uv run ruff check .
+
+      - name: Run zero-key API and state-machine smoke
+        run: uv run python scripts/run_public_smoke.py
+
+      - name: Install Chromium
+        run: uv run playwright install --with-deps chromium
+
+      - name: Run zero-key browser acceptance
+        run: uv run python scripts/run_browser_e2e.py

@@ -12,3 +12,5 @@ datasets/public/**/LICENSE text eol=lf
 *.xls binary
 *.xlsx binary
 *.pdf binary
+*.png binary
+*.gif binary

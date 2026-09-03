@@ -95,3 +95,12 @@ uv run ruff check .
 ```
 
 `run_public_smoke.py` 不调用外部模型，只检查应用导入、健康接口、本地认证、两条零等待完整回放和模拟协议创建。
+
+若希望按候选发布门槛检查真实浏览器交互，再执行：
+
+```powershell
+uv run playwright install chromium
+uv run python scripts/run_browser_e2e.py --artifacts-dir .codex-tmp/browser-e2e
+```
+
+该脚本使用隔离的临时 SQLite 数据库，验证诊断 2 次点击、探索 4 次点击、刷新和历史恢复均成立，并要求零重复写入、零浏览器控制台错误。它不调用基模，不会使用或测试你的 API Key。

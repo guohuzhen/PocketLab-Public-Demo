@@ -145,7 +145,7 @@ def create_diagnostic_showcase(
 
 
 def _diagnostic_showcase_upload(task_id: str) -> SensorRecordingUpload:
-    amplitudes = {"task-1": 1.90, "task-2": 0.42, "task-3": 0.44}
+    amplitudes = {"task-1": 1.90, "task-2": 0.42}
     amplitude = amplitudes.get(task_id)
     if amplitude is None:
         raise ValueError("该诊断演示没有更多预置测量。")
@@ -167,7 +167,6 @@ def _diagnostic_showcase_upload(task_id: str) -> SensorRecordingUpload:
     labels = {
         "task-1": "SHOWCASE · 原始偏载基线",
         "task-2": "SHOWCASE · 均匀重排衣物",
-        "task-3": "SHOWCASE · 均匀工况重复验证",
     }
     return SensorRecordingUpload(
         label=labels[task_id],
@@ -205,23 +204,6 @@ def _diagnostic_showcase_next_task(task_id: str) -> MeasurementTaskDraft:
             expected_effect="decrease",
             effect_metric="rms",
         )
-    if task_id == "task-2":
-        return MeasurementTaskDraft(
-            title="重复均匀工况，验证下降能否复现",
-            instruction=(
-                "回放再次保持衣物均匀、地面和测点不变，重复同一高速脱水工况。"
-                "如果振动继续保持低位，系统会检查偏载解释是否达到终止门。"
-            ),
-            variable_to_change="不再改变条件，仅重复均匀工况",
-            controlled_variables=["同一洗衣机", "衣物均匀分布", "同一衣物总量", "同一转速", "同一测点", "同一手机姿态"],
-            required_sensor="accelerometer",
-            target_metric_key="selected_axis_rms_m_s2",
-            task_kind="control",
-            comparison_task_id="task-2",
-            target_hypothesis_ids=["h1", "h2"],
-            expected_effect="no_change",
-            effect_metric="rms",
-        )
     return MeasurementTaskDraft(
         title="保留现场边界，必要时再做机脚水平复核",
         instruction="若现实现场仍有明显振动，应停止演示推断并按厂家要求检查机脚、地面水平和安全状态。",
@@ -252,17 +234,14 @@ def _diagnostic_showcase_assessments(task_id: str) -> list[HypothesisAssessmentD
                 critical_prediction_tested=False,
             ),
         ]
-    critical_prediction_tested = task_id == "task-3"
     return [
         HypothesisAssessmentDraft(
             hypothesis_id="h1",
             status="supported",
             reasoning=(
-                "只改变衣物分布后振动显著下降，且均匀工况重复保持低位，符合偏载造成转动不平衡的关键预测。"
-                if task_id == "task-3"
-                else "只改变衣物分布后振动显著下降，符合偏载造成转动不平衡的关键预测。"
+                "只改变衣物分布后振动显著下降，符合偏载造成转动不平衡的关键预测。"
             ),
-            critical_prediction_tested=critical_prediction_tested,
+            critical_prediction_tested=True,
         ),
         HypothesisAssessmentDraft(
             hypothesis_id="h2",
@@ -270,7 +249,7 @@ def _diagnostic_showcase_assessments(task_id: str) -> list[HypothesisAssessmentD
             reasoning=(
                 "地面、机位和测点均未改变，但振动随衣物分布改变并在重复中保持，地面耦合不是本次回放的主要解释。"
             ),
-            critical_prediction_tested=critical_prediction_tested,
+            critical_prediction_tested=True,
         ),
     ]
 
@@ -279,21 +258,15 @@ def _diagnostic_showcase_receipt(task_id: str) -> DiagnosticReasoningReceipt | N
     if task_id == "task-1":
         return None
     source_fact_ids = ["fact-task-1-1", "fact-task-2-2"]
-    if task_id == "task-3":
-        source_fact_ids.append("fact-task-3-2")
     return DiagnosticReasoningReceipt(
         model_name=SHOWCASE_MODEL,
-        answer_headline=(
-            "均匀分布工况的重复回放再次保持低振动，偏载解释已通过终止门"
-            if task_id == "task-3"
-            else "重新均匀分布衣物后，振动强度显著下降"
-        ),
+        answer_headline="重新均匀分布衣物后，振动强度显著下降",
         mechanism_explanation=(
             "回放只改变衣物分布，洗衣机、衣物总量、转速、地面与测点保持不变。"
             "振动随负载分布显著下降，符合质心偏离转轴产生周期惯性力的机制；"
             "固定不变的地面耦合难以单独解释这种受控变化。"
         ),
-        confidence="high" if task_id == "task-3" else "medium",
+        confidence="medium",
         ranked_hypothesis_ids=["h1", "h2"],
         source_fact_ids=source_fact_ids,
         next_measurement_reason="",
@@ -332,7 +305,6 @@ def advance_diagnostic_showcase(
         evidence_summary={
             "task-1": "已建立原始偏载工况的高质量周期振动基线。",
             "task-2": "只重新均匀分布衣物后，振动 RMS 相对基线显著下降。",
-            "task-3": "均匀工况重复回放保持低振动，下降方向得到复现。",
         }[task_id],
         assessments=_diagnostic_showcase_assessments(task_id),
         next_task=_diagnostic_showcase_next_task(task_id),
@@ -340,8 +312,7 @@ def advance_diagnostic_showcase(
     )
     message = {
         "task-1": "基线证据已保存。下一步只改变衣物分布，用同一分析器检验两个竞争解释。",
-        "task-2": "振动强度显著下降。系统还需要一次相同条件重复，确认变化不是偶然波动。",
-        "task-3": "重复证据保持同一方向，诊断终止向量已满足；报告与可执行建议已经生成。",
+        "task-2": "受控对照已区分两个竞争解释，诊断终止向量已满足；报告与可执行建议已经生成。",
     }[task_id]
     store.set_latest_agent_message(case_id, message)
     return DiagnosticSensorTaskResponse(

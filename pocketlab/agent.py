@@ -1236,6 +1236,7 @@ async def _request_diagnostic_proposal(
     max_tokens: int,
     strict_schema: bool = False,
     proposal_validator: Callable[[DiagnosticProposalT], None] | None = None,
+    defer_user_decision: bool = False,
 ) -> tuple[DiagnosticProposalT, dict[str, object]]:
     """Request a read-only proposal so transient failures can be retried safely."""
 
@@ -1401,7 +1402,7 @@ async def _request_diagnostic_proposal(
             else:
                 break
     elapsed_ms = max(0, round((time.perf_counter() - started) * 1000))
-    if last_reason_kind != "user_fallback":
+    if last_reason_kind != "user_fallback" and not defer_user_decision:
         decision = await await_model_validation_recovery_decision(
             detail=(
                 "基模已完成请求，但诊断草案未通过结构、证据或行动指导契约。"
@@ -2338,6 +2339,7 @@ async def run_diagnostic_intake_agent(case_id: str) -> str:
                 max_tokens=4_000,
                 strict_schema=_server_attempt == 0,
                 proposal_validator=validate_intake_proposal,
+                defer_user_decision=_server_attempt == 0,
             )
             total_model_requests += max(1, int(runtime.get("attempts") or 0))
             total_elapsed_ms += max(0, int(runtime.get("elapsed_ms") or 0))

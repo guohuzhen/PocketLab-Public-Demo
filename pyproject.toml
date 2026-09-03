@@ -25,6 +25,8 @@ packages = ["pocketlab"]
 
 [dependency-groups]
 dev = [
+  "pillow>=12.3.0",
+  "playwright>=1.62.0",
   "pytest>=8.4,<9",
   "ruff>=0.12,<1",
 ]

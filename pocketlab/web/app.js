@@ -1876,7 +1876,13 @@ async function openGeneralExploration(caseId) {
       state.generalPublicComponents = null;
     } else {
       await loadGeneralAcquisitionPlan(caseId);
-      await loadGeneralPublicComponentsForCase(caseId);
+      if (isGeneralShowcaseCase()) {
+        state.generalPublicComponents = null;
+        state.generalPublicRun = null;
+        state.generalPublicError = "";
+      } else {
+        await loadGeneralPublicComponentsForCase(caseId);
+      }
     }
     state.generalError = "";
     renderGeneralExploration();

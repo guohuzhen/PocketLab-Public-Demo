@@ -2,9 +2,15 @@
 
 > Competition preview of an evidence-grounded agent for real-world sensor experiments.
 
+[![Public candidate gates](https://github.com/guohuzhen/PocketLab-Public-Demo/actions/workflows/candidate.yml/badge.svg)](https://github.com/guohuzhen/PocketLab-Public-Demo/actions/workflows/candidate.yml)
+
 PocketLab 把手机传感器、确定性分析工具和大模型 Agent 组合成一条可追溯的实验链：用户提出现实问题，系统生成可检验任务，调用工具分析证据，再由 Agent 根据证据决定下一步或生成带边界的报告。
 
 这是从私密开发仓库导出的独立公开快照，不包含原仓库 Git 历史、参赛者密钥、账号数据库、真实手机数据、内部 holdout Evals、完整评测阈值、移动端工程或提交材料。
+
+![PocketLab 零等待双回放演示](docs/assets/pocketlab-demo.gif)
+
+GIF 展示的是仓库内真实 Web 页面与正式状态机，不是设计稿。无需 API Key 或手机即可完成两条链路：洗衣机诊断 2 次点击形成报告，光学探索 4 次点击形成条件对比与报告。
 
 ## 你可以看到什么
 
@@ -73,6 +79,14 @@ uv run python main.py
 
 两条回放都运行正式的 Case / Task / Session / Evidence / Termination / Report 状态链，但不调用基模或 phyphox。诊断记录标为 `test_fixture`，光学记录标为 `protocol_emulator`；两者均为 `physical=false`、`Gate C +0`，不能作为当前家庭或手机的现实证据。
 
+| 洗衣机诊断报告 | 光学探索报告 |
+| --- | --- |
+| ![洗衣机诊断最终报告](docs/assets/diagnostic-report.png) | ![光学探索条件对比与报告](docs/assets/optical-exploration-report.png) |
+
+完成后的两类工作会分别保存到历史记录，不会把“诊断问题”和“探索规律”混在同一个入口或数据模型中。
+
+![诊断与探索历史记录](docs/assets/history.png)
+
 ## 关于模型配置
 
 仓库不会提供共享 API Key。没有模型配置时，网页、账号、零等待诊断和零等待光学探索仍可完整运行；普通问题分流、模型规划、证据解释和真实 Agent 报告需要使用者自己的模型配置。模型卡可选择 `High · 质量优先` 或 `Fast · 速度优先`，系统不会自动切换模式或自动启用兜底。请勿把自己的 `.env.local`、Key、Cookie 或数据库提交到 Git。
@@ -101,6 +115,15 @@ uv run python scripts/check_git_safety.py --tracked
 uv run python scripts/run_public_smoke.py
 uv run ruff check .
 ```
+
+可选的真实浏览器候选版验收会启动一个隔离的临时数据库，并自动检查注册、两条回放、刷新恢复、历史恢复、重复写入和浏览器控制台：
+
+```powershell
+uv run playwright install chromium
+uv run python scripts/run_browser_e2e.py --artifacts-dir .codex-tmp/browser-e2e
+```
+
+它生成的截图和 GIF 默认留在被 Git 忽略的 `.codex-tmp`，不会污染账号数据库或提交运行时数据。当前候选版说明见 [RELEASE_NOTES.md](RELEASE_NOTES.md)。
 
 安全报告方式见 [SECURITY.md](SECURITY.md)。
 

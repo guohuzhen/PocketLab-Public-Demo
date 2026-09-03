@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import asyncio
 import json
-import logging
 import re
 import time
 from dataclasses import dataclass, replace
@@ -18,12 +16,12 @@ from agents import (
     function_tool,
 )
 from agents.agent import ToolsToFinalOutputResult
-from openai import AsyncOpenAI
 from pydantic import Field, ValidationError, model_validator
 
 from pocketlab.agent import (
     build_chat_completions_model,
     get_active_model_name,
+    get_shared_model_client,
     load_model_config,
 )
 from pocketlab.agent_runtime import (
@@ -46,12 +44,11 @@ from pocketlab.model_run_control import (
     ModelFallbackRequested,
     await_model_validation_recovery_decision,
     await_model_with_user_control,
-    current_model_run_id,
+    current_model_run_reasoning_mode,
 )
-from pocketlab.provider_compat import provider_reasoning_directive
+from pocketlab.model_streaming import consume_chat_completion
+from pocketlab.provider_compat import ReasoningStrategy, provider_reasoning_directive
 from pocketlab.sensor_models import SensorKind
-
-_LOGGER = logging.getLogger(__name__)
 
 _IDENTIFIER = r"^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$"
 _SHA256 = r"^[0-9a-f]{64}$"
@@ -712,12 +709,7 @@ async def _run_validated_json_chat(
     validation_feedback: str | None = None,
 ) -> tuple[GeneralEvidenceReasoningProposal, GeneralReasoningRuntimeSnapshot]:
     config = load_model_config()
-    client = AsyncOpenAI(
-        api_key=config.api_key,
-        base_url=config.base_url,
-        max_retries=0,
-        timeout=None if current_model_run_id() is not None else policy.timeout_s,
-    )
+    client = get_shared_model_client(config)
     payload = {
         "mode": "general_evidence_reasoning_json",
         "request": request.model_dump(mode="json"),
@@ -729,31 +721,53 @@ async def _run_validated_json_chat(
             + validation_feedback[:160]
         )
     started = time.perf_counter()
-    reasoning_directive = provider_reasoning_directive(
+    configured_directive = provider_reasoning_directive(
         config.base_url,
         config.model_name,
         strategy=config.reasoning_strategy,
         purpose="analysis",
     )
+    configured_run_mode: Literal["fast", "high", "provider_default"] = (
+        "high"
+        if configured_directive.effective_mode == "deep"
+        else configured_directive.effective_mode
+    )
+    active_reasoning_directive = configured_directive
     try:
-        request_kwargs: dict[str, Any] = {
-            "model": config.model_name,
-            "messages": [
-                {"role": "system", "content": _JSON_INSTRUCTIONS},
-                {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
-            ],
-            # The policy token budget remains visible in the audit trace but
-            # must not truncate a deep reasoning response before its JSON answer.
-            "max_tokens": 12_000,
-            **reasoning_directive.chat_completions_kwargs(),
-        }
-        if reasoning_directive.effective_mode != "deep":
-            request_kwargs["temperature"] = 0.1
+        async def request_model():
+            nonlocal active_reasoning_directive
+            active_mode = current_model_run_reasoning_mode(configured_run_mode)
+            active_strategy: ReasoningStrategy = (
+                "fast" if active_mode == "fast" else config.reasoning_strategy
+            )
+            active_reasoning_directive = provider_reasoning_directive(
+                config.base_url,
+                config.model_name,
+                strategy=active_strategy,
+                purpose="analysis",
+            )
+            request_kwargs: dict[str, Any] = {
+                "model": config.model_name,
+                "messages": [
+                    {"role": "system", "content": _JSON_INSTRUCTIONS},
+                    {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+                ],
+                "max_tokens": 12_000,
+                "stream": True,
+                **active_reasoning_directive.chat_completions_kwargs(),
+            }
+            if active_reasoning_directive.effective_mode != "deep":
+                request_kwargs["temperature"] = 0.1
+            response_or_stream = await client.chat.completions.create(**request_kwargs)
+            return await consume_chat_completion(response_or_stream)
+
         response = await await_model_with_user_control(
             operation="general_exploration_reasoning",
             model=config.model_name,
             noninteractive_timeout_s=policy.timeout_s,
-            awaitable_factory=lambda: client.chat.completions.create(**request_kwargs),
+            awaitable_factory=request_model,
+            reasoning_mode=configured_run_mode,
+            supports_fast_switch=(configured_run_mode == "high"),
         )
     except ModelFallbackRequested as exc:
         raise GeneralReasonerUnavailable("user-requested-fallback") from exc
@@ -761,35 +775,29 @@ async def _run_validated_json_chat(
         raise GeneralReasonerUnavailable(
             "validated-json-chat-" + type(exc).__name__.lower()
         ) from exc
-    finally:
-        try:
-            await asyncio.wait_for(client.close(), timeout=0.25)
-        # Client cleanup is best-effort and must not replace the reasoning outcome.
-        except Exception:
-            _LOGGER.debug("Ignored failure while closing the reasoning client", exc_info=True)
-    choice = response.choices[0]
-    content = choice.message.content or ""
-    if choice.finish_reason == "length" and not content:
+    content = response.content
+    if response.finish_reason == "length" and not content:
         raise GeneralReasonerUnavailable("validated-json-chat-output-budget")
     proposal = _extract_one_proposal(content)
-    usage = response.usage
-    total_tokens = int(usage.total_tokens) if usage is not None else None
     runtime = GeneralReasoningRuntimeSnapshot(
         run_id=f"run-{uuid4().hex}",
         status="completed",
         transport="validated_json_chat",
         transport_fallback_reason=fallback_reason[:80],
         model=config.model_name,
-        reasoning_mode=reasoning_directive.effective_mode,
-        reasoning_effort=reasoning_directive.reasoning_effort,
+        reasoning_mode=active_reasoning_directive.effective_mode,
+        reasoning_effort=active_reasoning_directive.reasoning_effort,
         model_requests=1,
         tool_calls=0,
         elapsed_ms=max(0, round((time.perf_counter() - started) * 1000)),
-        input_tokens=(int(usage.prompt_tokens) if usage is not None else None),
-        output_tokens=(int(usage.completion_tokens) if usage is not None else None),
-        total_tokens=total_tokens,
+        input_tokens=response.prompt_tokens,
+        output_tokens=response.completion_tokens,
+        total_tokens=response.total_tokens,
         token_budget=policy.token_budget,
-        token_budget_exceeded=(total_tokens is not None and total_tokens > policy.token_budget),
+        token_budget_exceeded=(
+            response.total_tokens is not None
+            and response.total_tokens > policy.token_budget
+        ),
     )
     return proposal, runtime
 
@@ -1090,6 +1098,65 @@ async def _run_validated_json_with_validation_retry(
     )
 
 
+def run_general_showcase_reasoner(
+    prepared: PreparedGeneralTransition,
+) -> GeneralReasoningRunResult:
+    """Build the final showcase explanation without issuing a provider request."""
+
+    request = build_general_reasoning_request(prepared)
+    base = _deterministic_reasoning_fallback(
+        request,
+        policy=general_reasoner_runtime_policy(),
+        reason="showcase-replay",
+    )
+    runtime = base.receipt.runtime
+    if runtime is None:  # pragma: no cover - deterministic fallback always records runtime
+        raise GeneralReasonerUnavailable("showcase-runtime-missing")
+    runtime = runtime.model_copy(
+        update={
+            "run_id": f"showcase-{uuid4().hex}",
+            "transport_fallback_reason": "showcase-replay",
+            "model": "server-showcase-replay",
+            "model_requests": 0,
+            "elapsed_ms": 0,
+            "error_kind": None,
+        }
+    )
+    explanation = base.proposal.explanations[0].model_copy(
+        update={
+            "label": "距离增加造成照度平台下降",
+            "reasoning": (
+                "近距离与距离加倍条件各自完成重复回放，条件内波动很小，而条件间下降清晰稳定。"
+                "服务端据此把几何扩散列为最符合当前证据的解释；这一步使用冻结事实和规则，不依赖基模生成。"
+            ),
+        }
+    )
+    proposal = base.proposal.model_copy(
+        update={
+            "answer_headline": "灯距增大后，照度稳定降到明显更低的平台",
+            "mechanism_explanation": (
+                "本次只改变手机感光面到台灯的距离，朝向、灯光档位与背景光保持不变。"
+                "近似点光源发出的光能分散到越来越大的空间截面，因此单位面积接收到的光通量随距离增加而降低；"
+                "回放中的条件差异稳定超过同条件重复波动，几何扩散解释得到支持。"
+            ),
+            "remaining_uncertainties": (
+                "真实台灯并非理想点光源，灯罩、反射面和环境背景光会改变距离关系。",
+                "手机光照传感器没有在本演示中进行绝对照度校准。",
+            ),
+            "falsification_conditions": (
+                "真实复测若无法在固定朝向下复现下降，应重新检查背景光、反射和传感器量程。",
+            ),
+            "explanations": (explanation,),
+        }
+    )
+    receipt = _validate_and_receipt(request, proposal, runtime)
+    return GeneralReasoningRunResult(
+        request=request,
+        proposal=proposal,
+        receipt=receipt,
+    )
+
+
 async def run_general_evidence_reasoner(
     prepared: PreparedGeneralTransition,
     *,
@@ -1116,23 +1183,20 @@ async def run_general_evidence_reasoner(
             ),
             error_kind=reason[:80] or "model_output_validation",
         )
-        if decision == "retry":
+        if decision in {"retry", "retry_fast"}:
             return await run_general_evidence_reasoner(
                 prepared,
                 agent=agent,
                 runner=runner,
                 policy=active_policy,
             )
-        fallback_reason = (
-            "user-requested-fallback"
-            if decision == "user_fallback"
-            else reason
-        )
-        return _deterministic_reasoning_fallback(
-            request,
-            policy=active_policy,
-            reason=fallback_reason,
-        )
+        if decision == "user_fallback":
+            return _deterministic_reasoning_fallback(
+                request,
+                policy=active_policy,
+                reason="user-requested-fallback",
+            )
+        raise GeneralReasonerUnavailable(reason)
 
     if agent is None and runner is None and "deepseek" in get_active_model_name().lower():
         try:

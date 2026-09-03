@@ -91,25 +91,38 @@ async function modelAwareFetch(input, init = {}) {
   );
   headers.set("X-PocketLab-Model-Run", runId);
   const startedAt = Date.now();
+  const activeProfile = state.modelCatalog?.profiles?.find(
+    (profile) => profile.profile_id === state.modelCatalog?.active_profile_id,
+  );
+  const configuredMode = activeProfile?.reasoning_strategy || "high";
   state.modelRunUi = { runId, startedAt, decisionAvailable: false, finishing: false };
   renderModelRunPanel({
     phase: "connecting",
-    detail: "正在建立模型连接；PocketLab 不会在 45 秒后自动截断。",
+    detail: "正在建立模型连接；达到 2 分钟时只会询问你，不会自动截断或兜底。",
     elapsed_s: 0,
     decision_available: false,
+    reasoning_mode: configuredMode,
   });
   pollModelRunStatus(runId);
   try {
     return await nativeFetch(input, { ...init, headers });
   } finally {
     if (state.modelRunUi?.runId === runId) {
+      try {
+        const finalStatusResponse = await nativeFetch(
+          `/api/v1/model-runs/${encodeURIComponent(runId)}`,
+        );
+        if (finalStatusResponse.ok) renderModelRunPanel(await finalStatusResponse.json());
+      } catch (_error) {
+        // The business response remains authoritative if the optional status channel closes first.
+      }
       state.modelRunUi.finishing = true;
       window.setTimeout(() => {
         if (state.modelRunUi?.runId === runId) {
           elements.modelRunPanel.hidden = true;
           state.modelRunUi = null;
         }
-      }, 700);
+      }, 1400);
     }
   }
 }
@@ -141,7 +154,7 @@ async function pollModelRunStatus(runId) {
       decision_available: false,
     });
   }
-  window.setTimeout(() => pollModelRunStatus(runId), 900);
+  window.setTimeout(() => pollModelRunStatus(runId), 600);
 }
 
 function renderModelRunPanel(status) {
@@ -151,14 +164,18 @@ function renderModelRunPanel(status) {
   const titles = {
     connecting: "正在连接基模",
     thinking: "基模正在处理（可能处于深度推理）",
-    completed: "模型结果正在通过服务端审查",
+    streaming: "基模正在流式生成",
+    validating: "正在校验并整理模型结果",
+    completed: "模型结果已完成",
     failed: "模型请求未成功",
     fallback_requested: "正在切换到安全兜底",
   };
   const eyebrows = {
     connecting: "MODEL CONNECTION",
     thinking: "MODEL PROCESSING",
-    completed: "MODEL VALIDATION",
+    streaming: "LIVE MODEL STREAM",
+    validating: "SERVER VALIDATION",
+    completed: "MODEL COMPLETE",
     failed: "MODEL ERROR",
     fallback_requested: "MODEL FALLBACK",
   };
@@ -166,22 +183,57 @@ function renderModelRunPanel(status) {
   elements.modelRunTitle.textContent = titles[phase] || "模型任务处理中";
   elements.modelRunDetail.textContent = status.detail || "正在等待模型服务响应。";
   elements.modelRunElapsed.textContent = `已等待 ${formatModelRunElapsed(status.elapsed_s || 0)}`;
+  const reasoningMode = status.reasoning_mode || "provider_default";
+  elements.modelRunMode.textContent = reasoningMode === "high"
+    ? "MODE · HIGH"
+    : reasoningMode === "fast"
+      ? "MODE · FAST"
+      : "MODE · PROVIDER DEFAULT";
+  elements.modelRunPanel.dataset.phase = phase;
+  elements.modelRunPanel.dataset.mode = reasoningMode;
+  renderModelRunStream(status);
   elements.modelRunDecision.hidden = !status.decision_available;
+  const allowedDecisions = new Set(status.allowed_decisions || []);
   const reachedMaxTurns = phase === "failed" && /max.?turns/i.test(status.error_kind || "");
   elements.modelRunDecisionText.textContent = reachedMaxTurns
     ? "本轮 Agent 已达到模型—工具往返次数上限；这不是基模思考时间到期。重试会提高本轮往返额度；只有你主动接受时，系统才会使用安全兜底。"
     : phase === "failed"
     ? "本轮基模调用或结果校验没有完成。你可以重试基模；只有你主动接受时，系统才会进入明确标记的安全兜底。"
-    : "本次等待已超过 2 分钟。你可以让基模继续深度思考，或主动停止并使用明确标记的安全兜底。";
+    : reasoningMode === "high"
+      ? "本次 High 运行已超过 2 分钟。你可以继续等待、停止当前请求并改用 Fast，或亲自选择明确标记的安全兜底。系统不会替你选择。"
+      : "本次 Fast 运行已超过 2 分钟。你可以继续等待，或亲自选择明确标记的安全兜底；Fast 不会反向切换到 High。";
   elements.modelRunContinueButton.textContent = reachedMaxTurns
     ? "提高轮数并重试基模"
     : phase === "failed" ? "重试基模" : "继续等待基模";
   elements.modelRunContinueButton.disabled = false;
+  elements.modelRunFastButton.hidden = !allowedDecisions.has("fast");
+  elements.modelRunFastButton.disabled = false;
   elements.modelRunFallbackButton.disabled = false;
   if (state.modelRunUi) {
     state.modelRunUi.decisionAvailable = Boolean(status.decision_available);
     state.modelRunUi.phase = phase;
   }
+}
+
+function renderModelRunStream(status) {
+  const outputCharacters = Number(status.stream_characters || 0);
+  const reasoningChunks = Number(status.reasoning_stream_chunks || 0);
+  const stages = Array.isArray(status.stage_events) ? status.stage_events : [];
+  const hasActivity = outputCharacters > 0 || reasoningChunks > 0 || stages.length > 0;
+  elements.modelRunStream.hidden = !hasActivity;
+  if (!hasActivity) return;
+  const firstChunk = status.first_stream_elapsed_s == null
+    ? ""
+    : ` · 首片段 ${formatModelRunElapsed(status.first_stream_elapsed_s)}`;
+  elements.modelRunStreamMeta.textContent = outputCharacters > 0
+    ? `${outputCharacters.toLocaleString("zh-CN")} 个可见字符${firstChunk}`
+    : `High 推理流 ${reasoningChunks.toLocaleString("zh-CN")} 个片段 · 正文尚未开始`;
+  elements.modelRunStreamPreview.textContent = status.stream_preview
+    || (reasoningChunks > 0
+      ? "High 模式仍在生成隐藏推理；PocketLab 只显示活动状态，不读取思维内容。"
+      : "模型正在组织可校验的结构化结果…");
+  elements.modelRunStages.innerHTML = stages.map((stage) => `
+    <span><b>${escapeHtml(stage.label || "MODEL")}</b>${escapeHtml(stage.detail || "处理中")}<i>${escapeHtml(stage.at_s ?? 0)}s</i></span>`).join("");
 }
 
 function formatModelRunElapsed(seconds) {
@@ -195,6 +247,7 @@ async function decideActiveModelRun(decision) {
   if (!run?.runId || !run.decisionAvailable) return;
   const wasFailed = run.phase === "failed";
   elements.modelRunContinueButton.disabled = true;
+  elements.modelRunFastButton.disabled = true;
   elements.modelRunFallbackButton.disabled = true;
   try {
     const response = await nativeFetch(
@@ -212,12 +265,16 @@ async function decideActiveModelRun(decision) {
       showToast(wasFailed
         ? "已按你的选择重试基模"
         : "已继续等待基模；两分钟后仍未完成时可以再次选择");
+    } else if (decision === "fast") {
+      elements.modelRunDecision.hidden = true;
+      showToast("已按你的选择停止 High，并以 Fast 模式重新请求基模");
     } else {
       showToast("已请求停止等待；结果会明确标记为安全兜底");
     }
   } catch (error) {
     showToast(error.message || "无法提交模型等待选择。", true);
     elements.modelRunContinueButton.disabled = false;
+    elements.modelRunFastButton.disabled = false;
     elements.modelRunFallbackButton.disabled = false;
   }
 }
@@ -393,11 +450,13 @@ async function initializeApp() {
 function collectElements() {
   [
     "healthPill", "healthText", "profileChip", "profileInitial", "profileUsername",
-    "modelRunPanel", "modelRunEyebrow", "modelRunTitle", "modelRunDetail", "modelRunElapsed",
-    "modelRunDecision", "modelRunDecisionText", "modelRunContinueButton", "modelRunFallbackButton",
+    "modelRunPanel", "modelRunEyebrow", "modelRunTitle", "modelRunDetail", "modelRunElapsed", "modelRunMode",
+    "modelRunStream", "modelRunStreamMeta", "modelRunStreamPreview", "modelRunStages",
+    "modelRunDecision", "modelRunDecisionText", "modelRunContinueButton", "modelRunFastButton", "modelRunFallbackButton",
     "logoutButton", "mobileLogoutButton", "pageEyebrow", "pageTitle", "dashboardGreeting", "dashboardCaseCount",
     "dashboardSessionCount", "dashboardDeviceState", "dashboardDeviceDetail",
     "dashboardRecentEmpty", "dashboardRecentCases", "continueCaseButton",
+    "showcaseDiagnosticStartButton", "showcaseExplorationStartButton",
     "investigationRouterQuestion", "investigationRouterContext", "routeInvestigationButton",
     "investigationRouteResult", "investigationRouteBadge", "investigationRouteTitle", "investigationRouteConfidence",
     "investigationRouteSummary", "investigationRouteSensors", "investigationRouteReasons", "investigationRoutePrivacy",
@@ -569,6 +628,8 @@ function bindEvents() {
     state.generalRoutedContext = "";
     resetGeneralCompilerClarification();
   });
+  elements.showcaseDiagnosticStartButton.addEventListener("click", startDiagnosticShowcaseReplay);
+  elements.showcaseExplorationStartButton.addEventListener("click", startExplorationShowcaseReplay);
   elements.generalPreferredSensor.addEventListener("change", updateGeneralCompilerAvailability);
   elements.generalCompilerMicrophonePrivacy.addEventListener("change", updateGeneralCompilerAvailability);
   elements.generalCompilerLocationPrivacy.addEventListener("change", updateGeneralCompilerAvailability);
@@ -642,6 +703,7 @@ function bindEvents() {
   elements.copyRetestButton.addEventListener("click", createOptionalRetestCase);
   elements.retryFinalReportButton.addEventListener("click", retryDiagnosticFinalReport);
   elements.modelRunContinueButton.addEventListener("click", () => decideActiveModelRun("continue"));
+  elements.modelRunFastButton.addEventListener("click", () => decideActiveModelRun("fast"));
   elements.modelRunFallbackButton.addEventListener("click", () => decideActiveModelRun("fallback"));
   document.querySelectorAll(".source-choice").forEach((button) => {
     button.addEventListener("click", () => switchMeasurementMode(button.dataset.mode));
@@ -816,6 +878,88 @@ function showNewCaseForm() {
   elements.caseSetup.hidden = false;
   elements.latestResult.hidden = true;
   resetPhyphoxStatus();
+}
+
+function isDiagnosticShowcaseCase(item = state.diagnosticCase) {
+  return Boolean(item?.context?.includes("showcase-replay:diagnostic-v1"));
+}
+
+function isGeneralShowcaseCase(item = state.generalCase) {
+  return Boolean(
+    item?.protocol?.title === "灯离远一倍，照度会怎样变化？· 零等待回放"
+    && item.protocol.selected_sources?.length === 1
+    && item.protocol.selected_sources[0] === "protocol_emulator"
+  );
+}
+
+function setShowcaseLauncherBusy(busy, activeButton = null, activeLabel = "正在建立回放…") {
+  state.busy = busy;
+  const buttons = [elements.showcaseDiagnosticStartButton, elements.showcaseExplorationStartButton];
+  buttons.forEach((button) => { button.disabled = busy; });
+  if (activeButton) {
+    const span = activeButton.querySelector("span");
+    if (span) span.textContent = activeLabel;
+  }
+  updateSubmitButton();
+  updateGeneralMeasurementButton();
+}
+
+function restoreShowcaseLauncherLabels() {
+  elements.showcaseDiagnosticStartButton.querySelector("span").textContent = "洗衣机诊断 · 2 步";
+  elements.showcaseExplorationStartButton.querySelector("span").textContent = "光学探索 · 4 步";
+}
+
+async function startDiagnosticShowcaseReplay() {
+  if (state.busy) return;
+  setShowcaseLauncherBusy(true, elements.showcaseDiagnosticStartButton, "正在建立洗衣机回放…");
+  try {
+    const response = await fetch("/api/v2/showcase-replays/diagnostic", { method: "POST" });
+    if (!response.ok) throw new Error(await readApiError(response));
+    const data = await response.json();
+    state.diagnosticCase = data.case;
+    state.latestAgentMessage = data.agent_message;
+    state.diagnosticRetryRecording = null;
+    state.pendingFile = null;
+    state.measurementMode = "public";
+    elements.latestResult.hidden = true;
+    navigateTo(`/app/cases/${encodeURIComponent(data.case.case_id)}`);
+    renderDiagnosticCase(data.agent_message);
+    switchMeasurementMode("public");
+    await loadCaseHistory();
+    showToast("洗衣机零等待诊断已就绪：点击两次即可看到报告");
+  } catch (error) {
+    showToast(error.message || "无法建立诊断回放。", true);
+  } finally {
+    setShowcaseLauncherBusy(false);
+    restoreShowcaseLauncherLabels();
+  }
+}
+
+async function startExplorationShowcaseReplay() {
+  if (state.busy) return;
+  setShowcaseLauncherBusy(true, elements.showcaseExplorationStartButton, "正在建立光学回放…");
+  try {
+    const response = await fetch("/api/v2/showcase-replays/exploration", { method: "POST" });
+    if (!response.ok) throw new Error(await readApiError(response));
+    state.generalCase = await response.json();
+    state.generalAcquisitionPlan = null;
+    state.generalPublicComponents = null;
+    state.generalPublicRun = null;
+    state.generalError = "";
+    await Promise.all([
+      refreshGeneralHistory(),
+      loadExplorationHistory(),
+      loadGeneralAcquisitionPlan(state.generalCase.case_id),
+    ]);
+    navigateTo(`/app/explore/general/runs/${encodeURIComponent(state.generalCase.case_id)}`);
+    renderGeneralExploration();
+    showToast("光学零等待探索已就绪：四次点击形成对比图与报告");
+  } catch (error) {
+    showToast(error.message || "无法建立探索回放。", true);
+  } finally {
+    setShowcaseLauncherBusy(false);
+    restoreShowcaseLauncherLabels();
+  }
 }
 
 async function checkHealth() {
@@ -1768,8 +1912,9 @@ async function loadGeneralPublicComponentsForCase(caseId) {
 function renderGeneralPublicComponents() {
   const catalog = state.generalPublicComponents;
   const result = state.generalPublicRun;
-  elements.generalPublicComponents.hidden = !state.generalCase || Boolean(state.generalCase.superseded_by_case_id);
-  if (!state.generalCase || state.generalCase.superseded_by_case_id) return;
+  const showcase = isGeneralShowcaseCase();
+  elements.generalPublicComponents.hidden = !state.generalCase || showcase || Boolean(state.generalCase.superseded_by_case_id);
+  if (!state.generalCase || showcase || state.generalCase.superseded_by_case_id) return;
   if (!catalog) {
     elements.generalPublicBoundaries.innerHTML = "";
     elements.generalPublicComponentList.innerHTML = "<p>当前无法读取公开组件。</p>";
@@ -1981,6 +2126,7 @@ function generalRecordingSelectionReady() {
 function updateGeneralMeasurementButton() {
   const collecting = state.generalCase?.status === "collecting" && !state.generalCase?.superseded_by_case_id;
   const task = state.generalCase?.current_task;
+  const controlsConfirmed = isGeneralShowcaseCase() || elements.generalControlsConfirm.checked;
   const duration = Number(elements.generalLiveDuration.value);
   const liveAllowed = Boolean(task
     && ((task.sensors?.length === 1 && state.generalCase.protocol.alignment === "sequential")
@@ -1991,12 +2137,12 @@ function updateGeneralMeasurementButton() {
     && state.generalCase.protocol.selected_sources[0] === "protocol_emulator");
   elements.generalSubmitMeasurement.disabled = !collecting
     || !generalRecordingSelectionReady()
-    || !elements.generalControlsConfirm.checked
+    || !controlsConfirmed
     || state.busy;
   elements.generalLiveCapture.disabled = !collecting
     || !liveAllowed
     || !state.savedDevice
-    || !elements.generalControlsConfirm.checked
+    || !controlsConfirmed
     || !elements.generalLivePrivacy.checked
     || !Number.isFinite(duration)
     || duration < 1
@@ -2004,7 +2150,7 @@ function updateGeneralMeasurementButton() {
     || state.busy;
   elements.generalSimulateMeasurement.disabled = !collecting
     || !simulationAllowed
-    || !elements.generalControlsConfirm.checked
+    || !controlsConfirmed
     || state.busy;
 }
 
@@ -2018,9 +2164,25 @@ function renderGeneralLiveSource() {
   const sensorLabels = sensors.map((value) => SENSOR_LABELS[value] || value).join(" + ");
   const simulatedRehearsal = item.protocol.selected_sources?.length === 1
     && item.protocol.selected_sources[0] === "protocol_emulator";
+  const showcase = isGeneralShowcaseCase(item);
   elements.generalLiveSourcePanel.hidden = simulatedRehearsal;
   elements.generalSavedSourcePanel.hidden = simulatedRehearsal;
   elements.generalSimulationSourcePanel.hidden = !simulatedRehearsal;
+  const simulationHeader = elements.generalSimulationSourcePanel.querySelector("header b");
+  const simulationDescription = elements.generalSimulationSourcePanel.querySelector("p");
+  const simulationFootnote = elements.generalSimulationSourcePanel.querySelector("small");
+  simulationHeader.textContent = showcase
+    ? "回放后台冻结证据，立即进入下一实验状态"
+    : "运行同一分析器、Planner 与终止链";
+  simulationDescription.innerHTML = showcase
+    ? "本案例只读取服务器预置的照度序列，仍写入标准 <code>Evidence</code>、决策轨迹和终止报告；不会请求基模。"
+    : "只生成带 <code>protocol_emulator</code> lineage 的确定性 analyzer-contract 序列。它能验收软件闭环与多传感器决策，但不是现实、公开或手机证据。";
+  simulationFootnote.textContent = showcase
+    ? "服务器冻结演示数据 · physical false · Gate C +0 · 0 次模型请求"
+    : "Gate C credited 0 · user phone evidence false · 结果会写入当前账号的“模拟演练”历史。";
+  elements.generalSimulateMeasurement.textContent = showcase
+    ? "回放本步并立即推进"
+    : "生成本轮模拟证据并继续";
   const liveAllowed = ((sensors.length === 1 && item.protocol.alignment === "sequential")
     || (sensors.length >= 2 && sensors.length <= 3 && item.protocol.alignment === "simultaneous"))
     && item.protocol.selected_sources?.includes("phyphox_live");
@@ -2392,17 +2554,23 @@ async function decideGeneralCheckpoint(action) {
 function renderGeneralExploration() {
   const item = state.generalCase;
   if (!item) return;
+  const showcase = isGeneralShowcaseCase(item);
+  elements.generalExplorationRun.dataset.showcase = String(showcase);
   elements.generalExplorationRun.hidden = routeState().exploreView !== "general_run";
-  elements.generalRealityFeedback.hidden = Boolean(item.superseded_by_case_id || item.report);
+  elements.generalRealityFeedback.hidden = Boolean(showcase || item.superseded_by_case_id || item.report);
   elements.generalRunTitle.textContent = item.protocol.title;
   elements.generalRunQuestion.textContent = item.protocol.question;
   elements.generalRunRevision.textContent = String(item.revision);
-  const compilerLabel = item.compiler_provenance?.source === "bounded_agent_compiler"
+  const compilerLabel = showcase
+    ? "服务器编排回放"
+    : item.compiler_provenance?.source === "bounded_agent_compiler"
     ? "Agent 编译凭证"
     : "手工审阅协议";
   const simulatedRehearsal = item.protocol.selected_sources?.length === 1
     && item.protocol.selected_sources[0] === "protocol_emulator";
-  const executionLabel = simulatedRehearsal ? "模拟演练 · 非现实证据" : "现实实验";
+  const executionLabel = showcase
+    ? "零等待回放 · 非现实证据"
+    : simulatedRehearsal ? "模拟演练 · 非现实证据" : "现实实验";
   const runStateLabel = item.superseded_by_case_id
     ? "已根据现场反馈重规划"
     : item.status === "collecting"
@@ -2413,26 +2581,34 @@ function renderGeneralExploration() {
   elements.generalRunStatus.textContent = `${runStateLabel} · ${executionLabel} · ${compilerLabel}`;
   renderGeneralAcquisitionPlan();
   const task = item.current_task;
-  elements.generalTaskStep.textContent = task ? `TASK ${task.sequence} · REPEAT ${task.repeat_index}` : item.reasoning_checkpoint ? "AGENT CHECKPOINT" : "PROTOCOL COMPLETE";
-  elements.generalTaskTitle.textContent = task?.title || (item.reasoning_checkpoint ? "等待你选择继续探索或收手" : "实验已经结束");
-  elements.generalTaskInstruction.innerHTML = renderHouseholdInstruction(task?.instruction || (item.reasoning_checkpoint ? item.reasoning_checkpoint.prompt : "服务端已停止生成新任务，请查看报告。"));
   const taskCondition = task
     ? item.protocol.conditions.find((condition) => condition.condition_id === task.condition_id)
     : null;
+  const showcaseTaskTitle = task
+    ? `${taskCondition?.label || task.condition_id} · 光线 · 第 ${task.repeat_index} 轮回放`
+    : "";
+  const showcaseInstruction = task
+    ? `后台已冻结“${taskCondition?.label || task.condition_id}”的第 ${task.repeat_index} 轮照度序列。无需连接手机或选择信号；点击下方按钮后，系统会立即计算照度中位数与质量，并把证据写入实验路线。`
+    : "";
+  elements.generalTaskStep.textContent = task ? `TASK ${task.sequence} · REPEAT ${task.repeat_index}` : item.reasoning_checkpoint ? "AGENT CHECKPOINT" : "PROTOCOL COMPLETE";
+  elements.generalTaskTitle.textContent = (showcase && task ? showcaseTaskTitle : task?.title) || (item.reasoning_checkpoint ? "等待你选择继续探索或收手" : "实验已经结束");
+  elements.generalTaskInstruction.innerHTML = renderHouseholdInstruction((showcase && task ? showcaseInstruction : task?.instruction) || (item.reasoning_checkpoint ? item.reasoning_checkpoint.prompt : "服务端已停止生成新任务，请查看报告。"));
   const taskContext = task
-    ? `<div class="general-task-context"><span>本轮场景：${escapeHtml(taskCondition?.label || task.condition_id)}</span><span>打开：${task.sensors.map((sensor) => escapeHtml(SENSOR_LABELS[sensor] || sensor)).join(" + ")}</span></div>`
+    ? `<div class="general-task-context"><span>本轮场景：${escapeHtml(taskCondition?.label || task.condition_id)}</span><span>${showcase ? "后台证据" : "打开"}：${task.sensors.map((sensor) => escapeHtml(SENSOR_LABELS[sensor] || sensor)).join(" + ")}</span></div>`
     : "";
   const taskFeedback = item.superseded_by_case_id
     ? `<div class="general-task-feedback"><button type="button" class="task-feedback-button" data-open-general-successor="${escapeHtml(item.superseded_by_case_id)}">打开按现场事实修订后的实验</button></div>`
-    : task
+    : task && !showcase
       ? `<div class="general-task-feedback"><button type="button" class="task-feedback-button" data-general-task-feedback="task_not_feasible">这一步在我家做不了</button><button type="button" class="task-feedback-button" data-general-task-feedback="instruction_unclear">我没看懂怎样操作</button></div>`
       : "";
   elements.generalTaskTags.innerHTML = `${taskContext}${taskFeedback}`;
-  elements.generalControlsConfirmText.textContent = simulatedRehearsal
+  elements.generalControlsConfirmText.textContent = showcase
+    ? "服务器冻结演示数据会被标记为非现实证据，并直接走标准状态机"
+    : simulatedRehearsal
     ? "我理解本轮只生成确定性模拟序列，用于排练软件闭环，不代表任何现实测量"
     : "我已按任务说明只改变自变量，并确认记录来自当前实验现场";
   elements.generalRecordingBind.hidden = !task || Boolean(item.superseded_by_case_id);
-  elements.generalControlsConfirm.parentElement.hidden = !task || Boolean(item.superseded_by_case_id);
+  elements.generalControlsConfirm.parentElement.hidden = showcase || !task || Boolean(item.superseded_by_case_id);
   elements.generalSubmitMeasurement.hidden = !task || Boolean(item.superseded_by_case_id);
   if (task && !item.superseded_by_case_id) {
     renderGeneralRecordingOptions();
@@ -2448,12 +2624,12 @@ function renderGeneralExploration() {
     (completedTask) => completedTask.action === "probe_optional_sensor"
   ).length;
   elements.generalProgress.innerHTML = [
-    ["有效证据", `${termination.valid_evidence_count} / ${termination.required_evidence_count}`],
+    ["有效证据", showcase ? `${termination.valid_evidence_count} / 4 回放目标` : `${termination.valid_evidence_count} / ${termination.required_evidence_count}`],
     ["条件覆盖", `${Math.round(termination.condition_coverage_ratio * 100)}%`],
     ["传感器覆盖", `${Math.round(termination.sensor_coverage_ratio * 100)}%`],
     ["重复覆盖", `${Math.round(termination.repeat_coverage_ratio * 100)}%`],
     ["证据预算", `${item.evidence.length} / ${item.protocol.evidence_policy.max_measurements}`],
-    ["测量任务", `${item.completed_tasks.length} / ${item.protocol.evidence_policy.hard_task_count || 32}`],
+    ["测量任务", showcase ? `${item.completed_tasks.length} / 4` : `${item.completed_tasks.length} / ${item.protocol.evidence_policy.hard_task_count || 32}`],
     ["纠偏预算", `${termination.correction_count} / ${item.protocol.evidence_policy.max_corrections}`],
     ["可选探测", `${optionalProbeTaskCount} / ${item.protocol.evidence_policy.max_optional_probe_count * (item.protocol.evidence_policy.optional_probe_evidence_mode === "paired_condition_contrast" ? 2 : 1)}`],
     ["终止权", "服务端独占"],
@@ -2480,8 +2656,14 @@ function renderGeneralExploration() {
   renderGeneralTrajectory(item);
   renderGeneralHypotheses(item);
   renderGeneralReasoningCheckpoint(item);
-  elements.generalBlockers.innerHTML = termination.blocker_codes.length
-    ? termination.blocker_codes.map((code) => `<li>${escapeHtml(code)}</li>`).join("")
+  const showcaseBlockers = termination.valid_evidence_count < 2
+    ? ["还需完成近距离与距离加倍的首轮回放。"]
+    : termination.valid_evidence_count < 4
+      ? ["还需各回放一次，确认条件差异明显超过同条件重复波动。"]
+      : [];
+  const visibleBlockers = showcase ? showcaseBlockers : termination.blocker_codes;
+  elements.generalBlockers.innerHTML = visibleBlockers.length
+    ? visibleBlockers.map((code) => `<li>${escapeHtml(code)}</li>`).join("")
     : "<li>没有阻塞项</li>";
   elements.generalEvidenceTrace.innerHTML = item.evidence.length ? item.evidence.slice().reverse().map((evidence) => `
     <article data-valid="${evidence.valid}" data-simulated="${Boolean(evidence.lineage.simulated)}"><header><b>${escapeHtml(evidence.condition_id)} · ${escapeHtml(SENSOR_LABELS[evidence.sensor] || evidence.sensor)}</b><span>${evidence.lineage.simulated ? "模拟 · " : ""}${escapeHtml(confidenceText(evidence.quality))}</span></header><p>${escapeHtml(evidence.metric.label)} ${escapeHtml(formatMetricValue(evidence.metric.value))} ${escapeHtml(evidence.metric.unit)}</p><small>${escapeHtml(evidence.lineage.source)} · physical ${evidence.lineage.physical_evidence ? "true" : "false"} · Gate C ${evidence.lineage.gate_c_passed ? "credited" : "+0"}</small><small>${escapeHtml(evidence.analysis.analyzer_id)} @ ${escapeHtml(evidence.analysis.analyzer_version)}</small></article>`).join("") : "<p>尚无证据。</p>";
@@ -2533,12 +2715,16 @@ function renderGeneralExploration() {
   elements.generalRunMessage.textContent = item.superseded_by_case_id
     ? "这是反馈前的旧版本。原任务与测量记录均已保留，但不能继续提交；请打开修订后的实验。"
     : item.status === "collecting"
-      ? simulatedRehearsal
+      ? showcase
+        ? "点击“回放本步并立即推进”；后台冻结照度证据会立即进入标准分析、决策与终止页面。"
+        : simulatedRehearsal
         ? "确认模拟边界后运行本轮；Agent 会依据已提交的模拟分析结果决定下一任务。"
         : "选择与当前任务传感器一致的账号记录；记录不会自动冒充真机 Gate C。"
       : item.status === "awaiting_user_decision"
         ? "当前解释仍有歧义：请选择继续 Agent 推荐测量，或依据现有证据收手。"
-        : simulatedRehearsal
+        : showcase
+          ? "零等待回放已结束；条件对比图、重复性审计与有边界报告均由标准探索状态机生成。"
+          : simulatedRehearsal
           ? "模拟排练已结束；报告仅证明软件闭环可执行。"
           : "实验已经结束，不会再生成新任务。";
   elements.generalControlsConfirm.checked = false;
@@ -2791,20 +2977,29 @@ async function simulateGeneralMeasurement() {
   const item = state.generalCase;
   const task = item?.current_task;
   if (!item || !task || state.busy || elements.generalSimulateMeasurement.disabled) return;
+  const showcase = isGeneralShowcaseCase(item);
   state.busy = true;
   updateGeneralMeasurementButton();
   elements.generalRunMessage.dataset.state = "loading";
-  elements.generalRunMessage.textContent = "正在生成带模拟 lineage 的分析器合同序列，并运行同一多轮决策与终止链…";
+  elements.generalRunMessage.textContent = showcase
+    ? "正在提交后台冻结证据，并立即推进标准探索状态机…"
+    : "正在生成带模拟 lineage 的分析器合同序列，并运行同一多轮决策与终止链…";
   try {
-    const response = await fetch(`/api/v2/general-explorations/${encodeURIComponent(item.case_id)}/simulate`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+    const endpoint = showcase
+      ? `/api/v2/showcase-replays/exploration/${encodeURIComponent(item.case_id)}/tasks/${encodeURIComponent(task.task_id)}`
+      : `/api/v2/general-explorations/${encodeURIComponent(item.case_id)}/simulate`;
+    const body = showcase
+      ? { expected_revision: item.revision }
+      : {
         expected_revision: item.revision,
         task_id: task.task_id,
         profile: elements.generalSimulationProfile.value,
         controls_confirmed: elements.generalControlsConfirm.checked,
-      }),
+      };
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
     });
     if (!response.ok) throw new Error(await readApiError(response));
     const result = await response.json();
@@ -2817,8 +3012,8 @@ async function simulateGeneralMeasurement() {
     renderGeneralExploration();
     const sensors = result.simulation.sensors.map((sensor) => SENSOR_LABELS[sensor] || sensor).join(" + ");
     elements.generalRunMessage.dataset.state = state.generalCase.status === "collecting" ? "ready" : state.generalCase.status === "awaiting_user_decision" ? "warning" : "complete";
-    elements.generalRunMessage.textContent = `${sensors} · 已提交 ${result.evidence.length} 条模拟分析证据；physical=false，Gate C +0。${state.generalCase.status === "collecting" ? "下一任务已由服务端生成。" : state.generalCase.status === "awaiting_user_decision" ? "证据仍有歧义，请选择继续或收手。" : "软件排练已形成有边界报告。"}`;
-    showToast(state.generalCase.status === "collecting" ? "模拟证据已提交，下一任务已生成" : state.generalCase.status === "awaiting_user_decision" ? "证据仍有歧义，请选择继续或收手" : "模拟演练闭环完成");
+    elements.generalRunMessage.textContent = `${sensors} · 已提交 ${result.evidence.length} 条${showcase ? "冻结回放" : "模拟分析"}证据；physical=false，Gate C +0。${state.generalCase.status === "collecting" ? "下一任务已由服务端生成。" : state.generalCase.status === "awaiting_user_decision" ? "证据仍有歧义，请选择继续或收手。" : "软件排练已形成有边界报告。"}`;
+    showToast(state.generalCase.status === "collecting" ? (showcase ? "本步已回放，下一实验状态已就绪" : "模拟证据已提交，下一任务已生成") : state.generalCase.status === "awaiting_user_decision" ? "证据仍有歧义，请选择继续或收手" : showcase ? "光学零等待探索回放完成" : "模拟演练闭环完成");
   } catch (error) {
     elements.generalRunMessage.dataset.state = "error";
     elements.generalRunMessage.textContent = error.message;
@@ -5008,12 +5203,22 @@ function renderModelProfiles() {
     const cost = profile.input_cost_per_million == null && profile.output_cost_per_million == null
       ? "未填写价格"
       : `输入 ${profile.input_cost_per_million ?? "—"} / 输出 ${profile.output_cost_per_million ?? "—"}`;
-    const reasoningLabel = ({ auto: "自动分层推理", fast: "快速优先", deep: "深度分析优先" })[profile.reasoning_strategy] || "供应商默认";
+    const reasoningLabel = ({ high: "High · 质量优先", fast: "Fast · 速度优先", auto: "High · 兼容旧配置", deep: "High · 兼容旧配置" })[profile.reasoning_strategy] || "供应商默认";
+    const reasoningMode = profile.reasoning_strategy === "fast" ? "fast" : "high";
+    const runtimeModeControl = isActive ? `
+      <section class="model-runtime-mode" aria-label="当前活动模型推理模式">
+        <div><b>运行模式</b><span>立即作用于后续诊断、探索、计划与报告生成</span></div>
+        <div class="model-mode-switch" role="group" aria-label="选择 Fast 或 High">
+          <button type="button" data-model-action="mode" data-profile-id="${escapeHtml(profile.profile_id)}" data-reasoning-strategy="high" aria-pressed="${reasoningMode === "high"}" ${reasoningMode === "high" ? "disabled" : ""}>High</button>
+          <button type="button" data-model-action="mode" data-profile-id="${escapeHtml(profile.profile_id)}" data-reasoning-strategy="fast" aria-pressed="${reasoningMode === "fast"}" ${reasoningMode === "fast" ? "disabled" : ""}>Fast</button>
+        </div>
+      </section>` : "";
     return `
       <article class="model-profile-card" data-active="${isActive}" data-status="${escapeHtml(status)}">
-        <header><div><span>${escapeHtml(profile.source === "environment" ? "ENV · READ ONLY" : "USER PROFILE")}</span><h4>${escapeHtml(profile.name)}</h4></div><em>${isActive ? "当前使用" : MODEL_CAPABILITY_LABELS[status]}</em></header>
+        <header><div><span>${escapeHtml(profile.source === "environment" ? "ENV · CREDENTIALS READ ONLY" : "USER PROFILE")}</span><h4>${escapeHtml(profile.name)}</h4></div><em>${isActive ? "当前使用" : MODEL_CAPABILITY_LABELS[status]}</em></header>
         <div class="model-profile-endpoint"><b>${escapeHtml(profile.model_name)}</b><span title="${escapeHtml(profile.base_url)}">${escapeHtml(profile.base_url)}</span></div>
         <div class="model-profile-meta"><span>Key ${escapeHtml(profile.api_key_hint)}</span><span>${escapeHtml(reasoningLabel)}</span><span>${escapeHtml(cost)}</span></div>
+        ${runtimeModeControl}
         <div class="model-integration-note" data-integration="${escapeHtml(profile.integration_status || "compatibility_trial")}"><b>${escapeHtml(integration.label)}</b><span>${escapeHtml(integration.detail)}</span></div>
         <div class="model-capability-row">
           ${modelCapabilityItem("文本", Boolean(probe?.text_generation))}
@@ -5033,7 +5238,7 @@ function renderModelProfiles() {
 function resetModelProfileForm() {
   state.editingModelProfileId = null;
   elements.modelProfileForm.reset();
-  elements.modelReasoningStrategy.value = "auto";
+  elements.modelReasoningStrategy.value = "high";
   elements.modelFormTitle.textContent = "新增模型配置";
   elements.modelFormMode.textContent = "NEW";
   elements.modelApiKeyHint.textContent = "新配置必须填写；编辑时留空表示保持原密钥";
@@ -5052,7 +5257,9 @@ function editModelProfile(profileId) {
   elements.modelProfileName.value = profile.name;
   elements.modelBaseUrl.value = profile.base_url;
   elements.modelNameInput.value = profile.model_name;
-  elements.modelReasoningStrategy.value = profile.reasoning_strategy || "auto";
+  elements.modelReasoningStrategy.value = ["fast", "high"].includes(profile.reasoning_strategy)
+    ? profile.reasoning_strategy
+    : "high";
   elements.modelApiKey.value = "";
   elements.modelInputCost.value = profile.input_cost_per_million ?? "";
   elements.modelOutputCost.value = profile.output_cost_per_million ?? "";
@@ -5144,7 +5351,33 @@ async function handleModelProfileAction(event) {
     await checkHealth();
     return;
   }
+  if (action === "mode") {
+    await setActiveModelReasoningMode(button, button.dataset.reasoningStrategy);
+    return;
+  }
   if (action === "probe") await probeModelProfile(button, profile);
+}
+
+async function setActiveModelReasoningMode(button, reasoningStrategy) {
+  const modeLabel = reasoningStrategy === "fast" ? "Fast" : "High";
+  const idleLabel = button.textContent;
+  setBusy(true, button, "切换中…");
+  try {
+    const response = await fetch("/api/v1/settings/models/active-mode", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reasoning_strategy: reasoningStrategy }),
+    });
+    if (!response.ok) throw new Error(await readApiError(response));
+    state.modelCatalog = await response.json();
+    renderModelProfiles();
+    await checkHealth();
+    showToast(`后续基模任务将使用 ${modeLabel} 模式`);
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    setBusy(false, button, idleLabel);
+  }
 }
 
 async function mutateModelProfile(button, url, method, busyLabel, successMessage) {
@@ -5219,9 +5452,9 @@ function renderAgentRuns() {
   elements.agentRuntimeList.innerHTML = catalog.runs.length
     ? catalog.runs.slice(0, 8).map((run) => {
       const reasoningMode = run.reasoning_mode === "deep"
-        ? `深度推理${run.reasoning_effort ? ` · ${run.reasoning_effort}` : ""}`
+        ? `High 推理${run.reasoning_effort ? ` · ${run.reasoning_effort}` : ""}`
         : run.reasoning_mode === "fast"
-          ? "快速推理"
+          ? "Fast 推理"
           : run.reasoning_mode === "provider_default"
             ? "供应商默认"
             : "模式未披露";
@@ -5710,7 +5943,9 @@ async function submitDiagnosticRealityFeedback() {
 function renderDiagnosticCase(agentMessage = "") {
   const diagnosticCase = state.diagnosticCase;
   if (!diagnosticCase) return;
-  const feedbackAllowed = !diagnosticCase.superseded_by_case_id && !diagnosticCase.final_report;
+  const showcase = isDiagnosticShowcaseCase(diagnosticCase);
+  elements.activeWorkflow.dataset.showcase = String(showcase);
+  const feedbackAllowed = !showcase && !diagnosticCase.superseded_by_case_id && !diagnosticCase.final_report;
   elements.diagnosticRealityFeedback.hidden = !feedbackAllowed;
   elements.diagnosticFeedbackPrivacy.parentElement.hidden = !diagnosticCase.evidence.some(
     (item) => ["microphone", "location"].includes(item.sensor),
@@ -5758,16 +5993,23 @@ function renderCurrentTask() {
     return;
   }
   const sensor = taskSensorDetails(task);
+  const showcase = isDiagnosticShowcaseCase();
   const sensorPlan = state.diagnosticCase?.sensor_plan || [];
   const taskOperationLabel = diagnosticTaskOperationLabel(task.task_kind);
   const controlledVariables = [...new Set(task.controlled_variables.map((item) => item.trim()).filter(Boolean))];
+  const measurementSummary = showcase
+    ? `<span><b>后台回放</b>服务器提交冻结的${escapeHtml(sensor.quantity)}序列，页面仍使用标准分析证据组件</span>`
+    : `<span><b>手机上打开</b>${escapeHtml(sensor.label)}实验，数据由 PocketLab 自动分析</span>`;
+  const taskFeedback = showcase
+    ? ""
+    : `<div class="task-feedback-actions"><button type="button" class="task-feedback-button" data-diagnostic-task-feedback="task_not_feasible">这一步在我家做不了</button><button type="button" class="task-feedback-button" data-diagnostic-task-feedback="instruction_unclear">我没看懂怎样操作</button></div>`;
   elements.currentTask.innerHTML = `
     <span class="task-code">${escapeHtml(task.task_id.toUpperCase())}</span>
     <h4>${escapeHtml(task.title)}</h4>
     ${renderHouseholdInstruction(task.instruction)}
-    <div class="task-plain-summary"><span><b>手机上打开</b>${escapeHtml(sensor.label)}实验，数据由 PocketLab 自动分析</span><span><b>${escapeHtml(taskOperationLabel)}</b>${escapeHtml(task.variable_to_change)}</span></div>
-    ${controlledVariables.length ? `<details class="task-controls"><summary>实验中还要保持哪些条件不变</summary><ul>${controlledVariables.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul><small>如果其中一项在你家无法做到，请点下方“这一步在我家做不了”。</small></details>` : ""}
-    <div class="task-feedback-actions"><button type="button" class="task-feedback-button" data-diagnostic-task-feedback="task_not_feasible">这一步在我家做不了</button><button type="button" class="task-feedback-button" data-diagnostic-task-feedback="instruction_unclear">我没看懂怎样操作</button></div>
+    <div class="task-plain-summary">${measurementSummary}<span><b>${escapeHtml(taskOperationLabel)}</b>${escapeHtml(task.variable_to_change)}</span></div>
+    ${controlledVariables.length ? `<details class="task-controls"><summary>实验中还要保持哪些条件不变</summary><ul>${controlledVariables.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul><small>${showcase ? "这些控制条件已经冻结在后台回放数据中。" : "如果其中一项在你家无法做到，请点下方“这一步在我家做不了”。"}</small></details>` : ""}
+    ${taskFeedback}
     ${sensorPlan.length ? `<div class="diagnostic-sensor-plan"><b>Agent 传感器计划</b>${sensorPlan.map((item) => `<span class="${escapeHtml(item.role)}"><i>${escapeHtml(item.role === "primary" ? "主" : item.role === "supporting" ? "辅" : "选")}</i>${escapeHtml(SENSOR_LABELS[item.sensor] || item.sensor)}<small>${escapeHtml(item.rationale)}</small></span>`).join("")}</div>` : ""}`;
   elements.measurementLabelInput.value = `${state.diagnosticCase.title} · ${task.task_id}`;
   elements.phyphoxLabel.value = `${state.diagnosticCase.title} · ${task.task_id} · phyphox`;
@@ -5775,8 +6017,17 @@ function renderCurrentTask() {
   elements.mobileCaseCode.textContent = state.diagnosticCase.case_id;
   elements.mobileTaskCode.textContent = task.task_id;
   renderTaskSensorGuidance(task);
-  elements.publicDiagnosticTitle.textContent = `使用${sensor.label}的已审阅公开记录`;
-  elements.publicDiagnosticBoundary.textContent = `系统会运行${sensor.quantity}分析器并让 Agent 更新竞争机制；公开回放不是你家现场或你手机的证据。`;
+  elements.publicDiagnosticTitle.textContent = showcase
+    ? `零等待诊断回放 · ${sensor.label}证据已冻结`
+    : `使用${sensor.label}的已审阅公开记录`;
+  elements.publicDiagnosticBoundary.textContent = showcase
+    ? `点击后立即提交本轮${sensor.quantity}后台数据，更新假设并进入下一步或报告；不请求基模，也不代表你家现场。`
+    : `系统会运行${sensor.quantity}分析器并让 Agent 更新竞争机制；公开回放不是你家现场或你手机的证据。`;
+  elements.publicDiagnosticPrivacy.parentElement.hidden = showcase;
+  elements.publicDiagnosticRunButton.querySelector("span").textContent = showcase
+    ? "回放本步并立即推进"
+    : "运行公开回放并交给 Agent";
+  if (showcase && state.measurementMode !== "public") switchMeasurementMode("public");
   if (state.measurementMode === "simulation" && sensor.sensor === "accelerometer") {
     const recommendedProfile = suggestProfileForTask(state.diagnosticCase, task);
     if (recommendedProfile) elements.simulationProfile.value = recommendedProfile;
@@ -5839,6 +6090,11 @@ function diagnosticTaskOperationLabel(taskKind) {
 }
 
 function renderDiagnosticRuntimeNotice(diagnosticCase) {
+  if (isDiagnosticShowcaseCase(diagnosticCase)) {
+    elements.diagnosticRuntimeNotice.innerHTML = "<b>零等待服务器回放 · 0 次模型请求</b><p>候选解释、两轮加速度序列与推进规则均已冻结；点击只会提交后台数据并运行标准分析、证据和终止状态机。</p><small>这是产品流程演示，不是当前家庭、洗衣机或手机的现场诊断。</small>";
+    elements.diagnosticRuntimeNotice.hidden = false;
+    return;
+  }
   const intakeFallback = diagnosticCase.intake_transport === "deterministic_fallback";
   const latestReceipt = diagnosticCase.evidence?.at(-1)?.reasoning_receipt;
   const measurementFallback = latestReceipt?.transport === "deterministic_fallback";
@@ -5949,7 +6205,12 @@ function renderSolutionPlan(plan, report = state.diagnosticCase?.final_report) {
     (item) => item.reasoning_receipt?.transport === "deterministic_fallback",
   ).length;
   const evidenceCount = state.diagnosticCase?.evidence?.length || 0;
-  if (source === "model_generated") {
+  if (isDiagnosticShowcaseCase()) {
+    elements.solutionProvenance.className = "solution-provenance showcase";
+    elements.solutionProvenanceBadge.textContent = "服务器冻结回放 · 0 次模型请求";
+    elements.solutionProvenanceNote.textContent = "处理建议来自受约束的演示方案，并保留现实现场复测与安全升级边界。";
+    elements.retryFinalReportButton.hidden = true;
+  } else if (source === "model_generated") {
     elements.solutionProvenance.className = "solution-provenance model-generated";
     elements.solutionProvenanceBadge.textContent = "基模生成 · 安全审查通过";
     elements.solutionProvenanceNote.textContent = [
@@ -6116,19 +6377,23 @@ async function runDiagnosticPublicReplay() {
   const diagnosticCase = state.diagnosticCase;
   const task = diagnosticCase?.current_task;
   if (!task || state.busy) return;
-  setBusy(true, elements.publicDiagnosticRunButton, "正在验证来源、分析并运行 Agent…");
+  const showcase = isDiagnosticShowcaseCase(diagnosticCase);
+  setBusy(true, elements.publicDiagnosticRunButton, showcase ? "正在回放并推进…" : "正在验证来源、分析并运行 Agent…");
   try {
-    const response = await fetch(
-      `/api/v2/diagnostic-cases/${encodeURIComponent(diagnosticCase.case_id)}/tasks/${encodeURIComponent(task.task_id)}/public-replay`,
-      {
+    const endpoint = showcase
+      ? `/api/v2/showcase-replays/diagnostic/${encodeURIComponent(diagnosticCase.case_id)}/tasks/${encodeURIComponent(task.task_id)}`
+      : `/api/v2/diagnostic-cases/${encodeURIComponent(diagnosticCase.case_id)}/tasks/${encodeURIComponent(task.task_id)}/public-replay`;
+    const request = showcase
+      ? { method: "POST" }
+      : {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           privacy_acknowledged: elements.publicDiagnosticPrivacy.checked,
           observation_notes: "使用已审阅公开记录验收诊断闭环；这不是当前家庭现场证据。",
         }),
-      },
-    );
+      };
+    const response = await fetch(endpoint, request);
     if (!response.ok) {
       const errorPayload = await response.json().catch(() => ({}));
       const detail = errorPayload.detail;
@@ -6151,12 +6416,14 @@ async function runDiagnosticPublicReplay() {
     renderLatestResult(data.session, data.preview_samples, data.agent_message);
     await loadCaseHistory();
     const finished = Boolean(data.case.final_report);
-    showToast(finished ? "公开回放已形成有边界的诊断报告" : "公开回放已绑定，Agent 已选择下一项测量");
+    showToast(finished
+      ? (showcase ? "洗衣机零等待诊断回放完成" : "公开回放已形成有边界的诊断报告")
+      : (showcase ? "本步已回放，下一实验状态已就绪" : "公开回放已绑定，Agent 已选择下一项测量"));
     elements.latestResult.scrollIntoView({ behavior: "smooth", block: "start" });
   } catch (error) {
     showToast(error.message, true);
   } finally {
-    setBusy(false, elements.publicDiagnosticRunButton, "运行公开回放并交给 Agent");
+    setBusy(false, elements.publicDiagnosticRunButton, showcase ? "回放本步并立即推进" : "运行公开回放并交给 Agent");
     updateSubmitButton();
   }
 }
@@ -6537,7 +6804,11 @@ async function viewSession(sessionId, message = state.latestAgentMessage, scroll
 }
 
 async function loadSessionDetails(sessionId) {
-  const response = await fetch(`/api/v1/sessions/${encodeURIComponent(sessionId)}`);
+  const isSensorRecording = state.sensorRecordings.some((item) => item.session_id === sessionId);
+  const endpoint = isSensorRecording
+    ? `/api/v2/recordings/${encodeURIComponent(sessionId)}`
+    : `/api/v1/sessions/${encodeURIComponent(sessionId)}`;
+  const response = await fetch(endpoint);
   if (!response.ok) throw new Error(await readApiError(response));
   const data = await response.json();
   const record = {
@@ -6546,11 +6817,19 @@ async function loadSessionDetails(sessionId) {
     device: data.upload.device,
     notes: data.upload.notes,
     sample_count: data.upload.samples.length,
+    sensor: data.upload.sensor || data.analysis?.sensor || "accelerometer",
+    provenance: data.upload.provenance || { source: "legacy_session" },
     analysis: data.analysis,
     created_at: data.created_at,
     samples: data.upload.samples,
   };
-  state.sessions = state.sessions.map((item) => item.session_id === sessionId ? record : item);
+  if (isSensorRecording) {
+    state.sensorRecordings = state.sensorRecordings.map(
+      (item) => item.session_id === sessionId ? record : item,
+    );
+  } else {
+    state.sessions = state.sessions.map((item) => item.session_id === sessionId ? record : item);
+  }
   return record;
 }
 

@@ -14,6 +14,8 @@ PocketLab 把手机传感器、确定性分析工具和大模型 Agent 组合成
 - Workflow/state machine：唯一当前任务、单变量约束、充分度判断、动态停止和最终报告。
 - Security：本地账号隔离、API Key 凭据边界、局域网 phyphox 地址校验、超时和错误脱敏。
 - Observability：Agent 运行状态、耗时、重试、token/成本字段和证据审计。
+- Model runtime：用户可选择 High / Fast，真实可见输出采用流式展示；超过两分钟后只由用户决定继续、切换 Fast 或接受明确标记的兜底。
+- Zero-wait showcase：洗衣机诊断与光学探索各有一条服务器冻结回放，可逐步查看证据、状态变化和报告，不需要 API Key 或手机。
 
 ## 架构
 
@@ -33,7 +35,7 @@ flowchart TD
 
 ## 快速开始
 
-要求：Python 3.11+、[uv](https://docs.astral.sh/uv/)、一个由你本人授权使用的 OpenAI-compatible 模型接口。
+基础要求：Python 3.11+ 与 [uv](https://docs.astral.sh/uv/)。零等待回放不需要模型或手机；真实 Agent 路径需要一个由你本人授权使用的 OpenAI-compatible 模型接口。
 
 ```powershell
 git clone https://github.com/guohuzhen/PocketLab-Public-Demo.git
@@ -48,7 +50,7 @@ Copy-Item .env.example .env.local
 LLM_API_KEY=your-own-key
 LLM_BASE_URL=https://your-provider.example/v1
 LLM_MODEL=your-exact-model-name
-LLM_REASONING_STRATEGY=auto
+LLM_REASONING_STRATEGY=high
 PORT=8000
 ```
 
@@ -64,20 +66,16 @@ uv run python main.py
 
 ## 推荐体验路径
 
-为了在不连接手机的情况下查看 Agent 软件闭环，可以运行“洗衣机运行与地面振动模拟”：
+登录后有两条不依赖外部服务的完整演示：
 
-1. 登录后进入“探索实验 → 自由探索 Beta”。
-2. 直接审阅并填写结构化实验协议。
-3. 选择“模拟演练”“依次采集”和“加速度计”。
-4. 参考条件填写“洗衣机停机”，比较条件填写“洗衣机稳定运行”。
-5. 每轮确认控制条件，使用“清晰条件差异”完成四轮。
-6. 查看动态停止、证据轨迹和最终报告。
+1. 打开“新建诊断”，点击“洗衣机诊断 · 2 步”；逐轮点击回放按钮，查看偏载基线、均匀分布对照、假设更新与最终建议。
+2. 打开“探索实验”，点击“光学探索 · 4 步”；逐轮提交近距离、距离加倍及两组重复照度证据，查看条件图、充分度与最终报告。
 
-模拟演练会调用生产状态机、分析器和 Agent 解释链，但始终标记为 `protocol_emulator`、`physical=false`、`Gate C +0`，不能作为现实物理证据。
+两条回放都运行正式的 Case / Task / Session / Evidence / Termination / Report 状态链，但不调用基模或 phyphox。诊断记录标为 `test_fixture`，光学记录标为 `protocol_emulator`；两者均为 `physical=false`、`Gate C +0`，不能作为当前家庭或手机的现实证据。
 
 ## 关于模型配置
 
-仓库不会提供共享 API Key。没有模型配置时，网页、账号和协议创建可以启动，但需要模型推理的诊断和 Exploration 完整闭环不能完成。请勿把自己的 `.env.local`、Key、Cookie 或数据库提交到 Git。
+仓库不会提供共享 API Key。没有模型配置时，网页、账号、零等待诊断和零等待光学探索仍可完整运行；普通问题分流、模型规划、证据解释和真实 Agent 报告需要使用者自己的模型配置。模型卡可选择 `High · 质量优先` 或 `Fast · 速度优先`，系统不会自动切换模式或自动启用兜底。请勿把自己的 `.env.local`、Key、Cookie 或数据库提交到 Git。
 
 ## 关于 phyphox
 
@@ -93,7 +91,7 @@ phyphox 远程接口没有密码和加密，不应在公共 Wi-Fi 中启用。�
 
 ## 公开版范围
 
-此快照聚焦 Web + Python Agent。公开数据回放包因许可证和体积边界未随仓库分发，因此相关目录可能为空；这不会影响网页启动、账号、结构化协议和模拟探索入口。详细范围见 [PUBLIC_MANIFEST.md](PUBLIC_MANIFEST.md)。
+此快照聚焦 Web + Python Agent。第三方公开数据回放包因许可证和体积边界未随仓库分发，因此对应数据目录可能为空；服务器生成且明确标记来源的两条零等待演示包含在代码中。详细范围见 [PUBLIC_MANIFEST.md](PUBLIC_MANIFEST.md)。
 
 ## 安全检查
 

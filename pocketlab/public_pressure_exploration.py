@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any, Protocol
 from uuid import uuid4
 
+from pocketlab.agent_runtime import AgentRuntimeError
+from pocketlab.model_run_control import await_model_validation_recovery_decision
 from pocketlab.public_pressure_agent_models import (
     PublicPressureEvidenceSnapshot,
     PublicPressureEvidenceView,
@@ -82,9 +84,7 @@ class PublicPressurePlannerOutcome(Protocol):
     runtime_trace: dict[str, Any]
 
 
-PlannerCallable = Callable[
-    [PublicPressurePlannerRequest], Awaitable[PublicPressurePlannerOutcome]
-]
+PlannerCallable = Callable[[PublicPressurePlannerRequest], Awaitable[PublicPressurePlannerOutcome]]
 
 
 class PublicPressureExplorationUnavailable(RuntimeError):
@@ -272,9 +272,7 @@ def _evidence_view(
         confidence=inspection.confidence,
         platforms_passed=inspection.platforms_passed,
         pressure_direction=inspection.pressure_direction,
-        approximate_height_change_m=round(
-            inspection.standard_atmosphere_height_change_m, 6
-        ),
+        approximate_height_change_m=round(inspection.standard_atmosphere_height_change_m, 6),
         warning_codes=tuple(warning_codes),
     )
 
@@ -326,9 +324,7 @@ def _allowed_rationales(candidate_id: str) -> frozenset[str]:
     return {
         _ELEVATOR_ID: frozenset({"match_elevator_goal"}),
         _STAIR_ID: frozenset({"match_stairwell_goal"}),
-        _LIVE_ID: frozenset(
-            {"request_live_device_evidence", "evidence_quality_insufficient"}
-        ),
+        _LIVE_ID: frozenset({"request_live_device_evidence", "evidence_quality_insufficient"}),
         _UNSUPPORTED_ID: frozenset({"unsupported_claim_boundary"}),
         _FINISH_ID: frozenset({"evidence_quality_sufficient"}),
         _PRIVACY_ID: frozenset({"privacy_not_acknowledged"}),
@@ -341,8 +337,7 @@ def _safe_runtime_trace(value: object) -> PublicPressureRuntimeTrace | None:
     safe: dict[str, object] = {
         key: item
         for key, item in value.items()
-        if key in _SAFE_RUNTIME_KEYS
-        and (item is None or isinstance(item, (str, int, float, bool)))
+        if key in _SAFE_RUNTIME_KEYS and (item is None or isinstance(item, (str, int, float, bool)))
     }
     tool_events = value.get("tool_events")
     if isinstance(tool_events, list):
@@ -389,8 +384,7 @@ async def _select_candidate(
             or decision.step != request.step
             or decision.request_sha256 != request.request_sha256
             or decision.selected_candidate_id not in candidate_ids
-            or decision.rationale_code
-            not in _allowed_rationales(decision.selected_candidate_id)
+            or decision.rationale_code not in _allowed_rationales(decision.selected_candidate_id)
         ):
             raise _PlannerDecisionRejected
         return decision.selected_candidate_id, PublicPressurePlannerTrace(
@@ -406,13 +400,35 @@ async def _select_candidate(
             transport=(
                 str(runtime_trace.get("transport"))
                 if isinstance(runtime_trace, dict)
-                and runtime_trace.get("transport")
-                in {"function_tool", "validated_json_text"}
+                and runtime_trace.get("transport") in {"function_tool", "validated_json_text"}
                 else "not_attempted"
             ),
             runtime_trace=_safe_runtime_trace(runtime_trace),
         )
     except (ImportError, OSError, RuntimeError, TypeError, ValueError) as exc:
+        reason = _fallback_reason(exc)
+        if planner is None and reason not in {
+            "user-fallback",
+            "user-requested-fallback",
+        }:
+            recovery = await await_model_validation_recovery_decision(
+                detail=(
+                    "公开气压实验的基模规划未通过候选约束。请选择重试基模、"
+                    "切换 Fast，或明确使用冻结的强工作流步骤。"
+                ),
+                error_kind=reason,
+            )
+            if recovery in {"retry", "retry_fast"}:
+                return await _select_candidate(request, planner=None)
+            if recovery != "user_fallback":
+                raise AgentRuntimeError(
+                    "malformed_model_output",
+                    "公开气压规划未完成；PocketLab 未替用户自动启用回退。",
+                    retryable=True,
+                ) from exc
+            reason = "user-requested-fallback"
+        elif planner is None:
+            reason = "user-requested-fallback"
         return fallback_id, PublicPressurePlannerTrace(
             step=request.step,
             operation=request.operation,
@@ -423,7 +439,7 @@ async def _select_candidate(
             rationale_code="strong_workflow_fallback",
             source="strong_workflow_fallback",
             outcome="fallback",
-            fallback_reason=_fallback_reason(exc),
+            fallback_reason=reason,
             runtime_trace=_safe_runtime_trace(getattr(exc, "runtime_trace", None)),
         )
 
@@ -485,9 +501,7 @@ def _empty_report(family: str) -> PublicPressureReport:
         return PublicPressureReport(
             conclusion_kind="live_measurement_required",
             title="这个问题需要你的手机 Pressure 数据",
-            summary=(
-                "公开回放不能回答你此刻所在楼层或当前设备状态；Agent 已停止公开证据替代。"
-            ),
+            summary=("公开回放不能回答你此刻所在楼层或当前设备状态；Agent 已停止公开证据替代。"),
             uncertainties=("尚无当前手机的起点、终点和回程压力平台。",),
             forbidden_claims=("不得用公开 Pixel XL 记录推断你当前手机所在楼层。",),
             next_live_measurement=(
@@ -535,9 +549,7 @@ def _evidence_snapshot(
             pack_dir=pack_dir,
         )
         manifest = load_public_replay_dataset(pack_dir)
-        recording = next(
-            item for item in manifest.recordings if item.recording_id == recording_id
-        )
+        recording = next(item for item in manifest.recordings if item.recording_id == recording_id)
         inspection = inspect_pressure_trace(trace)
         comparison = compare_pressure_height_to_ground_truth(trace, ground_truth)
         claim_audit = audit_pressure_claim_support(
@@ -721,9 +733,7 @@ async def run_public_pressure_exploration(
             selected_candidate_id=selected_id,
             fallback_candidate_id=selected_id,
             rationale_code=(
-                "request_live_device_evidence"
-                if family == "live"
-                else "unsupported_claim_boundary"
+                "request_live_device_evidence" if family == "live" else "unsupported_claim_boundary"
             ),
             source="strong_workflow_fallback",
             outcome="fallback",
@@ -753,9 +763,7 @@ async def run_public_pressure_exploration(
         return PublicPressureExploreResult(
             run_id=run_id,
             research_question=request.research_question,
-            execution_status=(
-                "unsupported" if terminal_family == "unsupported" else "limited"
-            ),
+            execution_status=("unsupported" if terminal_family == "unsupported" else "limited"),
             selected_route_id=selected_id,
             planner_status=_planner_status((first_trace,)),
             planner_trace=(first_trace,),
@@ -790,9 +798,7 @@ async def run_public_pressure_exploration(
     traces = (first_trace, follow_trace)
     report = _evidence_report(evidence, selected_report_action=follow_id)
     execution_status = (
-        "completed"
-        if report.conclusion_kind == "supported_relative_height"
-        else "limited"
+        "completed" if report.conclusion_kind == "supported_relative_height" else "limited"
     )
     return PublicPressureExploreResult(
         run_id=run_id,

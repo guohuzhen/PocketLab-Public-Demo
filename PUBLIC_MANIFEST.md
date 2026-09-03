@@ -2,7 +2,7 @@
 
 ## Snapshot identity
 
-- Private source commit: `b2366ae`
+- Private source commit: `a308375`
 - Export type: clean file snapshot with a new Git root
 - Public history inherited from private repository: no
 - Mobile client included: no
@@ -13,7 +13,9 @@
 
 - FastAPI application and responsive Web UI
 - Agent runtime, context/state, provider compatibility and run audit
+- High/Fast user selection, visible-output streaming and explicit user-owned fallback control
 - Diagnostic and Exploration product state machines
+- Two zero-model showcase chains: washing-machine diagnosis and four-step light exploration
 - Deterministic sensor analyzers and phyphox bridge
 - Local account, persistence and evidence workbench
 - Dependency lockfile and environment template
@@ -34,4 +36,4 @@
 
 ## Functional boundary
 
-The public snapshot is designed to start locally and demonstrate the Web product, account isolation, protocol creation and model-backed diagnostic/Exploration flows. Users must supply their own compatible model credentials. Dataset-backed public replay cards are intentionally unavailable in this snapshot.
+The public snapshot is designed to start locally and demonstrate the Web product, account isolation, two zero-wait evidence chains, protocol creation and optional model-backed diagnostic/Exploration flows. Users must supply their own compatible model credentials only for real model operations. Third-party dataset-backed replay cards are intentionally unavailable; the bundled showcase records are server-generated, explicitly non-physical fixtures.

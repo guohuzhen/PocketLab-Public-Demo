@@ -7,7 +7,7 @@ import os
 import re
 import time
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Literal, Protocol
 from urllib.parse import urlparse
@@ -77,9 +77,7 @@ class KeyringCredentialVault:
 
             keyring.set_password(MODEL_SECRET_SERVICE, reference, secret)
         except Exception as exc:  # pragma: no cover - backend-specific
-            raise ModelSecretUnavailable(
-                "无法写入系统凭据存储；API Key 没有保存。"
-            ) from exc
+            raise ModelSecretUnavailable("无法写入系统凭据存储；API Key 没有保存。") from exc
 
     def delete(self, reference: str) -> None:
         try:
@@ -146,7 +144,9 @@ def normalize_model_base_url(value: str) -> str:
         is_localhost or (address is not None and address.is_loopback)
     ):
         raise ValueError("远程模型接口必须使用 HTTPS；HTTP 仅允许本机模型。")
-    if address is not None and not (address.is_global or address.is_loopback):
+    if address is not None and not (
+        address.is_loopback or (address.is_global and not address.is_multicast)
+    ):
         raise ValueError("模型接口不能指向私有、链路本地或保留 IP 地址。")
     return normalized
 
@@ -155,11 +155,7 @@ def agent_model_name_incompatibility(model_name: str) -> str | None:
     """Identify high-confidence model families that do not use chat completions."""
 
     normalized = model_name.strip().casefold()
-    tokens = {
-        token
-        for token in re.split(r"[/_.:\-]+", normalized)
-        if token
-    }
+    tokens = {token for token in re.split(r"[/_.:\-]+", normalized) if token}
     if any(token.startswith("cogview") for token in tokens):
         family = "CogView 图像生成"
     elif any(token.startswith("cogvideo") for token in tokens):
@@ -189,7 +185,7 @@ class ModelProfileCreate(_StrictModel):
     base_url: str = Field(min_length=8, max_length=500)
     model_name: str = Field(min_length=1, max_length=200)
     api_key: SecretStr = Field(min_length=1, max_length=4096)
-    reasoning_strategy: ReasoningStrategy = "auto"
+    reasoning_strategy: ReasoningStrategy = "high"
     input_cost_per_million: float | None = Field(default=None, ge=0, le=100_000)
     output_cost_per_million: float | None = Field(default=None, ge=0, le=100_000)
     make_default: bool = True
@@ -206,6 +202,11 @@ class ModelProfileCreate(_StrictModel):
         if issue is not None:
             raise ValueError(issue)
         return value
+
+    @field_validator("reasoning_strategy", mode="before")
+    @classmethod
+    def reasoning_mode_is_canonical(cls, value: object) -> ReasoningStrategy:
+        return normalize_reasoning_strategy(str(value) if value is not None else None)
 
 
 class ModelProfileUpdate(_StrictModel):
@@ -230,6 +231,22 @@ class ModelProfileUpdate(_StrictModel):
             raise ValueError(issue)
         return value
 
+    @field_validator("reasoning_strategy", mode="before")
+    @classmethod
+    def reasoning_mode_is_canonical(cls, value: object | None) -> ReasoningStrategy | None:
+        if value is None:
+            return None
+        return normalize_reasoning_strategy(str(value))
+
+
+class ModelReasoningStrategyUpdate(_StrictModel):
+    reasoning_strategy: ReasoningStrategy
+
+    @field_validator("reasoning_strategy", mode="before")
+    @classmethod
+    def reasoning_mode_is_canonical(cls, value: object) -> ReasoningStrategy:
+        return normalize_reasoning_strategy(str(value) if value is not None else None)
+
 
 ModelCapabilityTier = Literal[
     "unverified",
@@ -252,9 +269,7 @@ class ModelCapabilityProbe(_StrictModel):
     diagnostic_agent_ready: bool
     native_json_mode: bool = False
     validated_json_text: bool = False
-    structured_transport: Literal[
-        "native_json_mode", "validated_json_text", "none"
-    ] = "none"
+    structured_transport: Literal["native_json_mode", "validated_json_text", "none"] = "none"
     tool_transport: Literal["named_function", "auto", "none"] = "none"
     probe_requests: int = Field(default=0, ge=0, le=16)
     transient_retries: int = Field(default=0, ge=0, le=4)
@@ -271,7 +286,7 @@ class ModelProfileSummary(_StrictModel):
     model_name: str
     api_key_configured: bool
     api_key_hint: str
-    reasoning_strategy: ReasoningStrategy = "auto"
+    reasoning_strategy: ReasoningStrategy = "high"
     input_cost_per_million: float | None = None
     output_cost_per_million: float | None = None
     is_default: bool
@@ -313,7 +328,7 @@ class ActiveModelConfiguration:
     api_key: str
     base_url: str
     model_name: str
-    reasoning_strategy: ReasoningStrategy = "auto"
+    reasoning_strategy: ReasoningStrategy = "high"
     input_cost_per_million: float | None = None
     output_cost_per_million: float | None = None
 
@@ -356,7 +371,7 @@ def environment_model_configuration(
         base_url=normalized_url,
         model_name=model_name,
         reasoning_strategy=normalize_reasoning_strategy(
-            source.get("LLM_REASONING_STRATEGY", "auto")
+            source.get("LLM_REASONING_STRATEGY", "high")
         ),
         input_cost_per_million=optional_cost("LLM_INPUT_COST_PER_MILLION"),
         output_cost_per_million=optional_cost("LLM_OUTPUT_COST_PER_MILLION"),
@@ -386,6 +401,35 @@ class ModelProfileStore:
     @staticmethod
     def _secret_ref(user_id: str, profile_id: str) -> str:
         return f"{user_id}:{profile_id}"
+
+    @staticmethod
+    def _environment_reasoning_key(user_id: str) -> str:
+        return f"model_reasoning_strategy:{user_id}"
+
+    def _environment_reasoning_strategy(
+        self,
+        environment: ActiveModelConfiguration,
+    ) -> ReasoningStrategy:
+        row = self._database.fetch_one(
+            "SELECT value FROM app_meta WHERE key = ?",
+            (self._environment_reasoning_key(self._active_user_id),),
+        )
+        if row is None:
+            return environment.reasoning_strategy
+        try:
+            return normalize_reasoning_strategy(row["value"])
+        except ValueError:
+            # Ignore a corrupt/stale metadata value and retain the validated env mode.
+            return environment.reasoning_strategy
+
+    def resolve_environment(self) -> ActiveModelConfiguration | None:
+        environment = environment_model_configuration()
+        if environment is None:
+            return None
+        return replace(
+            environment,
+            reasoning_strategy=self._environment_reasoning_strategy(environment),
+        )
 
     def list_profiles(self) -> list[ModelProfileSummary]:
         user_id = self._active_user_id
@@ -560,9 +604,7 @@ class ModelProfileStore:
         row = self._row(profile_id)
         secret = self._vault.get(row["secret_ref"])
         if not secret:
-            raise ModelSecretUnavailable(
-                "该模型配置的 API Key 不在系统凭据存储中，请重新填写。"
-            )
+            raise ModelSecretUnavailable("该模型配置的 API Key 不在系统凭据存储中，请重新填写。")
         return ActiveModelConfiguration(
             profile_id=row["profile_id"],
             api_key=secret,
@@ -575,11 +617,40 @@ class ModelProfileStore:
 
     def resolve_active(self) -> ActiveModelConfiguration | None:
         row = self._database.fetch_one(
-            "SELECT profile_id FROM model_profiles "
-            "WHERE user_id = ? AND is_default = 1 LIMIT 1",
+            "SELECT profile_id FROM model_profiles WHERE user_id = ? AND is_default = 1 LIMIT 1",
             (self._active_user_id,),
         )
-        return self.resolve(row["profile_id"]) if row is not None else None
+        return self.resolve(row["profile_id"]) if row is not None else self.resolve_environment()
+
+    def set_active_reasoning_strategy(
+        self,
+        strategy: ReasoningStrategy,
+    ) -> ModelProfileCatalog:
+        """Persist a Fast/High choice without exposing or rewriting credentials."""
+
+        normalized = normalize_reasoning_strategy(strategy)
+        user_id = self._active_user_id
+        row = self._database.fetch_one(
+            "SELECT profile_id FROM model_profiles WHERE user_id = ? AND is_default = 1 LIMIT 1",
+            (user_id,),
+        )
+        if row is not None:
+            self._database.execute(
+                "UPDATE model_profiles "
+                "SET reasoning_strategy = ?, revision = revision + 1, updated_at = ? "
+                "WHERE profile_id = ? AND user_id = ?",
+                (normalized, utc_now(), row["profile_id"], user_id),
+            )
+            return self.catalog()
+
+        if environment_model_configuration() is None:
+            raise ModelProfileError("当前没有可切换推理模式的活动模型。")
+        self._database.execute(
+            "INSERT INTO app_meta(key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (self._environment_reasoning_key(user_id), normalized),
+        )
+        return self.catalog()
 
     def save_probe(
         self,
@@ -602,7 +673,7 @@ class ModelProfileStore:
     def catalog(self) -> ModelProfileCatalog:
         profiles = self.list_profiles()
         active_user_profile = next((item for item in profiles if item.is_default), None)
-        environment = environment_model_configuration()
+        environment = self.resolve_environment()
         if environment is not None:
             integration = pocketlab_model_integration(environment.model_name)
             profiles.append(
@@ -712,9 +783,7 @@ async def probe_model_compatibility(
     structured_json = False
     function_tools = False
     model_listing = False
-    structured_transport: Literal[
-        "native_json_mode", "validated_json_text", "none"
-    ] = "none"
+    structured_transport: Literal["native_json_mode", "validated_json_text", "none"] = "none"
     tool_transport: Literal["named_function", "auto", "none"] = "none"
     probe_requests = 0
     transient_retries = 0
@@ -819,9 +888,7 @@ async def probe_model_compatibility(
         )
         if response is not None:
             try:
-                text_generation = bool(
-                    response.choices and response.choices[0].message.content
-                )
+                text_generation = bool(response.choices and response.choices[0].message.content)
             except (AttributeError, IndexError, TypeError):
                 errors.append("text:malformed-response")
             if not text_generation:

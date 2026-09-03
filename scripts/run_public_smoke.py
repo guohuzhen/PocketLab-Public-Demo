@@ -78,6 +78,39 @@ def main() -> int:
     assert replays.status_code == 200, replays.text
     assert replays.json() == [], "The public snapshot must not silently bundle replay datasets."
 
+    diagnostic_start = client.post("/api/v2/showcase-replays/diagnostic")
+    assert diagnostic_start.status_code == 200, diagnostic_start.text
+    diagnostic_case = diagnostic_start.json()["case"]
+    diagnostic_clicks = 0
+    while diagnostic_case["current_task"] is not None:
+        task_id = diagnostic_case["current_task"]["task_id"]
+        diagnostic_step = client.post(
+            f"/api/v2/showcase-replays/diagnostic/{diagnostic_case['case_id']}/tasks/{task_id}"
+        )
+        assert diagnostic_step.status_code == 200, diagnostic_step.text
+        diagnostic_case = diagnostic_step.json()["case"]
+        diagnostic_clicks += 1
+        assert diagnostic_clicks <= 2
+    assert diagnostic_clicks == 2
+    assert diagnostic_case["final_report"] is not None
+
+    exploration_start = client.post("/api/v2/showcase-replays/exploration")
+    assert exploration_start.status_code == 200, exploration_start.text
+    exploration_case = exploration_start.json()
+    exploration_clicks = 0
+    while exploration_case["current_task"] is not None:
+        task_id = exploration_case["current_task"]["task_id"]
+        exploration_step = client.post(
+            f"/api/v2/showcase-replays/exploration/{exploration_case['case_id']}/tasks/{task_id}",
+            json={"expected_revision": exploration_case["revision"]},
+        )
+        assert exploration_step.status_code == 200, exploration_step.text
+        exploration_case = exploration_step.json()["case"]
+        exploration_clicks += 1
+        assert exploration_clicks <= 4
+    assert exploration_clicks == 4
+    assert exploration_case["report"] is not None
+
     created = client.post(
         "/api/v2/general-explorations",
         json={
@@ -92,7 +125,10 @@ def main() -> int:
     assert case["protocol"]["selected_sources"] == ["protocol_emulator"]
     assert case["current_task"]["sensors"] == ["accelerometer"]
 
-    print("Public demo smoke passed: health, auth, empty replay catalog, protocol creation.")
+    print(
+        "Public demo smoke passed: health, auth, empty third-party replay catalog, "
+        "two-step diagnosis, four-step light exploration, and protocol creation."
+    )
     return 0
 
 

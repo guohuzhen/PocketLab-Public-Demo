@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Mapping
 from typing import Literal, Self
@@ -79,6 +80,26 @@ class GeneralExplorationValidation(ValueError):
         super().__init__(message)
         self.blocker_codes = blocker_codes
         self.user_messages = user_messages
+
+
+def load_general_experiment_case_json(payload: str) -> GeneralExperimentCase:
+    """Read pre-reasoning-checkpoint records without rewriting persisted history."""
+
+    data = json.loads(payload)
+    termination = data.get("termination")
+    if isinstance(termination, dict):
+        evidence_complete = bool(termination.get("evidence_complete"))
+        finished = data.get("report") is not None or str(data.get("status", "")).startswith(
+            "completed"
+        )
+        termination.setdefault("guidance_ready", evidence_complete and finished)
+        termination.setdefault(
+            "reasoning_required",
+            evidence_complete and not bool(termination["guidance_ready"]),
+        )
+    return GeneralExperimentCase.model_validate_json(
+        json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    )
 
 
 def build_general_reality_evidence_reuse_audit(
@@ -746,7 +767,7 @@ class GeneralExplorationStore:
         )
         if row is None:
             raise GeneralExplorationNotFound(f"Unknown general exploration: {case_id}")
-        case = GeneralExperimentCase.model_validate_json(row["case_json"])
+        case = load_general_experiment_case_json(row["case_json"])
         if case.revision != int(row["revision"]):
             raise RuntimeError("general exploration revision column and JSON diverged")
         return case
@@ -762,7 +783,7 @@ class GeneralExplorationStore:
         )
         result: list[GeneralExplorationCaseHistoryItem] = []
         for row in rows:
-            case = GeneralExperimentCase.model_validate_json(row["case_json"])
+            case = load_general_experiment_case_json(row["case_json"])
             primary = next(
                 item.sensor for item in case.protocol.sensors if item.role == "primary"
             )
@@ -1291,7 +1312,7 @@ class GeneralExplorationStore:
         return {
             evidence.lineage.recording_id
             for row in rows
-            for evidence in GeneralExperimentCase.model_validate_json(row["case_json"]).evidence
+            for evidence in load_general_experiment_case_json(row["case_json"]).evidence
         }
 
 

@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any, Protocol
 from uuid import uuid4
 
+from pocketlab.agent_runtime import AgentRuntimeError
+from pocketlab.model_run_control import await_model_validation_recovery_decision
 from pocketlab.public_light_models import (
     PublicLightEvidenceSnapshot,
     PublicLightEvidenceView,
@@ -424,9 +426,7 @@ def _follow_up_candidates(
         and _question_mentions_phone_transfer(request.research_question)
     ):
         candidates.append(_phone_trace_candidate())
-    candidates.extend(
-        [_terminal_candidate(_FINISH_ID), _terminal_candidate(_LIVE_ID)]
-    )
+    candidates.extend([_terminal_candidate(_FINISH_ID), _terminal_candidate(_LIVE_ID)])
     if candidates[0].candidate_id in {_PHONE_TRACE_ID, _COMPARE_ID}:
         fallback = (
             candidates[0].candidate_id
@@ -501,11 +501,7 @@ def _safe_runtime_trace(value: object) -> PublicLightRuntimeTrace | None:
     safe: dict[str, object] = {
         key: item
         for key, item in value.items()
-        if key in _SAFE_RUNTIME_KEYS
-        and (
-            item is None
-            or isinstance(item, (str, int, float, bool))
-        )
+        if key in _SAFE_RUNTIME_KEYS and (item is None or isinstance(item, (str, int, float, bool)))
     }
     tool_events = value.get("tool_events")
     if isinstance(tool_events, list):
@@ -566,8 +562,7 @@ async def _select_candidate(
             or decision.step != planner_request.step
             or decision.request_sha256 != planner_request.request_sha256
             or decision.selected_candidate_id not in candidate_ids
-            or decision.rationale_code
-            not in _allowed_rationales(decision.selected_candidate_id)
+            or decision.rationale_code not in _allowed_rationales(decision.selected_candidate_id)
         ):
             raise _PlannerDecisionRejected
         return decision.selected_candidate_id, PublicLightPlannerTrace(
@@ -583,13 +578,35 @@ async def _select_candidate(
             transport=(
                 str(runtime_trace.get("transport"))
                 if isinstance(runtime_trace, dict)
-                and runtime_trace.get("transport")
-                in {"function_tool", "validated_json_text"}
+                and runtime_trace.get("transport") in {"function_tool", "validated_json_text"}
                 else "not_attempted"
             ),
             runtime_trace=_safe_runtime_trace(runtime_trace),
         )
     except (ImportError, OSError, RuntimeError, TypeError, ValueError) as exc:
+        reason = _fallback_reason(exc)
+        if planner is None and reason not in {
+            "user-fallback",
+            "user-requested-fallback",
+        }:
+            recovery = await await_model_validation_recovery_decision(
+                detail=(
+                    "公开照度实验的基模规划未通过候选约束。请选择重试基模、"
+                    "切换 Fast，或明确使用冻结的强工作流步骤。"
+                ),
+                error_kind=reason,
+            )
+            if recovery in {"retry", "retry_fast"}:
+                return await _select_candidate(planner_request, planner=None)
+            if recovery != "user_fallback":
+                raise AgentRuntimeError(
+                    "malformed_model_output",
+                    "公开照度规划未完成；PocketLab 未替用户自动启用回退。",
+                    retryable=True,
+                ) from exc
+            reason = "user-requested-fallback"
+        elif planner is None:
+            reason = "user-requested-fallback"
         return fallback_id, PublicLightPlannerTrace(
             step=planner_request.step,
             operation=planner_request.operation,
@@ -600,7 +617,7 @@ async def _select_candidate(
             rationale_code="strong_workflow_fallback",
             source="strong_workflow_fallback",
             outcome="fallback",
-            fallback_reason=_fallback_reason(exc),
+            fallback_reason=reason,
             runtime_trace=_safe_runtime_trace(getattr(exc, "runtime_trace", None)),
         )
 
@@ -711,8 +728,7 @@ def _trace_snapshot(result: PublicLightTraceResult) -> PublicLightEvidenceSnapsh
         ),
     ]
     facts.extend(
-        _fact(f"phone_{item.key}", item.value, item.unit or "value")
-        for item in result.metrics
+        _fact(f"phone_{item.key}", item.value, item.unit or "value") for item in result.metrics
     )
     limitations = [
         *boundaries,
@@ -929,9 +945,7 @@ def _privacy_report() -> PublicLightReport:
             "也没有调用模型；请只在本机理解风险后显式确认，再重新运行。"
         ),
         uncertainties=["未读取任何隐私敏感公开记录，因此当前不能形成实验结论。"],
-        forbidden_claims=[
-            "不得绕过确认、导入账号历史、导出或从光照节律识别个人行为。"
-        ],
+        forbidden_claims=["不得绕过确认、导入账号历史、导出或从光照节律识别个人行为。"],
         next_live_measurement=None,
     )
 
@@ -981,19 +995,13 @@ def _report(
     evidence_ids = [item.evidence_id for item in evidence]
     source_ids = _unique_text(item.dataset_id for item in evidence)
     uncertainties = _unique_text(
-        [
-            limitation
-            for item in evidence
-            for limitation in item.claim_boundary
-        ]
+        [limitation for item in evidence for limitation in item.claim_boundary]
     )[:16]
     forbidden = list(audit.forbidden_phrasing)[:16]
     findings: list[PublicLightFinding] = []
     conclusion_kind = "limited"
     title = "公开 Light 证据只能形成有边界的结论"
-    summary = (
-        "公开来源已经过注册、哈希和确定性工具校验，但它们不是当前用户设备的受控重复。"
-    )
+    summary = "公开来源已经过注册、哈希和确定性工具校验，但它们不是当前用户设备的受控重复。"
     if family.startswith("unsupported_") or _UNSUPPORTED_ID in selected_ids:
         conclusion_kind = "unsupported"
         title = "公开回放不足以支持该结论"
@@ -1003,14 +1011,10 @@ def _report(
         ]
     elif family == "registered_condition_comparison":
         privacy_evidence = [
-            item.evidence_id
-            for item in evidence
-            if item.dataset_id == PRIVACY_DUAL_DATASET_ID
+            item.evidence_id for item in evidence if item.dataset_id == PRIVACY_DUAL_DATASET_ID
         ]
         phone_evidence = [
-            item.evidence_id
-            for item in evidence
-            if item.dataset_id == PHYPhOX_SNR_DATASET_ID
+            item.evidence_id for item in evidence if item.dataset_id == PHYPhOX_SNR_DATASET_ID
         ]
         difference = _fact_value(evidence, "privacy_median_difference")
         ratio = _fact_value(evidence, "privacy_median_ratio")
@@ -1047,9 +1051,7 @@ def _report(
         )
     elif family == "naturalistic_context":
         context_evidence = [
-            item.evidence_id
-            for item in evidence
-            if item.dataset_id == BRIGHTER_TIME_DATASET_ID
+            item.evidence_id for item in evidence if item.dataset_id == BRIGHTER_TIME_DATASET_ID
         ]
         q25 = _fact_value(evidence, "brighter_participant_median_q25")
         median = _fact_value(evidence, "brighter_participant_median")
@@ -1074,14 +1076,10 @@ def _report(
             )
         conclusion_kind = "supported_descriptive"
         title = "获得了自然环境照度的描述性上下文"
-        summary = (
-            "结果只定位于公开参与者级摘要分布，不能作为健康阈值、设备校准或时间规律。"
-        )
+        summary = "结果只定位于公开参与者级摘要分布，不能作为健康阈值、设备校准或时间规律。"
     else:
         phone_evidence = [
-            item.evidence_id
-            for item in evidence
-            if item.dataset_id == PHYPhOX_SNR_DATASET_ID
+            item.evidence_id for item in evidence if item.dataset_id == PHYPhOX_SNR_DATASET_ID
         ]
         transitions = _fact_value(evidence, "phone_order_only_transition_count")
         if transitions is not None:
@@ -1184,9 +1182,8 @@ async def run_public_light_exploration(
             report=_privacy_report(),
         )
 
-    if (
-        family == "registered_condition_comparison"
-        and _question_mentions_phone_transfer(request.research_question)
+    if family == "registered_condition_comparison" and _question_mentions_phone_transfer(
+        request.research_question
     ):
         selected_id = _COMPARE_ID
         first_trace = PublicLightPlannerTrace(
@@ -1271,9 +1268,7 @@ async def run_public_light_exploration(
                         )
                     )
                 else:
-                    if snapshot.evidence_id not in {
-                        item.evidence_id for item in evidence
-                    }:
+                    if snapshot.evidence_id not in {item.evidence_id for item in evidence}:
                         execution.sequence = len(tool_trace) + 1
                         evidence.append(snapshot)
                         tool_trace.append(execution)

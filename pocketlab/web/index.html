@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="PocketLab：从物理问题到手机测量、证据分析和下一项实验。" />
     <title>PocketLab · 实验智能体</title>
-    <link rel="stylesheet" href="/assets/styles.css?v=20260826h" />
-    <script src="/assets/app.js?v=20260826h" defer></script>
+    <link rel="stylesheet" href="/assets/styles.css?v=20260903b" />
+    <script src="/assets/app.js?v=20260903b" defer></script>
   </head>
   <body>
     <div class="ambient ambient-one" aria-hidden="true"></div>
@@ -120,6 +120,15 @@
               <p>提出一个可比较的物理问题，自选已支持传感器；系统生成冻结协议并逐轮决定测量顺序、可选探测与充分度。</p>
               <b>进入自由探索 Beta →</b>
             </a>
+            <article class="exploration-path-card available showcase-replay-card">
+              <span>03 · EXPLORATION PUBLIC REPLAY</span>
+              <h3>光学探索零等待回放</h3>
+              <p>依次比较灯在两个距离下的照度并完成重复测量；每次只点一次，立即看到当前实验采集证据、对比图与最终报告。</p>
+              <div class="showcase-replay-actions">
+                <button class="button button-primary" id="showcaseExplorationStartButton" type="button"><span>光学探索 · 4 步</span></button>
+              </div>
+              <small>Exploration 专属入口 · 服务器冻结演示数据 · 0 次模型请求</small>
+            </article>
           </div>
         </section>
 
@@ -664,7 +673,7 @@
               <label><span>配置名称</span><input id="modelProfileName" maxlength="80" autocomplete="off" placeholder="例如：并行智算云 DeepSeek" required /></label>
               <label><span>OpenAI-compatible Base URL</span><input id="modelBaseUrl" maxlength="500" inputmode="url" autocomplete="off" placeholder="https://provider.example/v1" required /></label>
               <label><span>Model Name</span><input id="modelNameInput" maxlength="200" autocomplete="off" placeholder="provider/model-name" required /><small class="model-field-help">只接受能够调用 Chat Completions 的语言模型；图像生成、视频、Embedding 等模型不能作为 Agent 基模。</small></label>
-              <label><span>推理策略</span><select id="modelReasoningStrategy"><option value="auto">自动（推荐）</option><option value="fast">快速优先</option><option value="deep">深度分析优先</option></select><small class="model-reasoning-help">自动模式让路由、工具选择保持快速，把深度推理留给证据解释、竞争假设和最终报告；未知供应商不会收到私有参数。</small></label>
+              <label><span>基模模式</span><select id="modelReasoningStrategy"><option value="high">High · 质量优先</option><option value="fast">Fast · 速度优先</option></select><small class="model-reasoning-help">High 用于更充分的规划、证据解释与报告生成；Fast 关闭已验证供应商的思考模式以缩短等待。每次 High 运行超过 2 分钟后仍可由你手动切到 Fast；系统不会自动切换或自动启用兜底。</small></label>
               <label><span>API Key <i id="modelApiKeyHint">新配置必须填写；编辑时留空表示保持原密钥</i></span><span class="secret-input"><input id="modelApiKey" maxlength="4096" type="password" autocomplete="new-password" placeholder="只会发送到 PocketLab 后端" /><button id="modelApiKeyToggle" type="button" aria-label="显示 API Key" aria-pressed="false">显示</button></span></label>
               <details class="model-cost-details">
                 <summary>可选：价格信息</summary>
@@ -698,8 +707,6 @@
             </div>
           </div>
           <div class="settings-form">
-            <p class="settings-note"><b>尚未安装 phyphox？</b> iPhone / iPad 与可使用 Google Play 的 Android 请从 <a href="https://phyphox.org/download/" target="_blank" rel="noreferrer">phyphox 官方下载页</a>安装；无 Google Play 的 Android（包括部分国产手机环境）可通过 <a href="https://f-droid.org/en/packages/de.rwth_aachen.phyphox/" target="_blank" rel="noreferrer">F-Droid 官方条目</a>安装。不要使用第三方 APK 镜像站。</p>
-            <p class="settings-note">安装后：① 手机与电脑连接同一可信网络；② 在手机打开任务要求的实验并启用“远程访问”；③ 将手机显示的完整 <code>http://</code> 地址填到下方并测试。完成采集后立即关闭远程访问。</p>
             <div class="settings-grid device-settings">
               <label><span>设备名称</span><input id="deviceNameInput" maxlength="80" value="我的手机" /></label>
               <label><span>phyphox 远程地址</span><input id="deviceUrlInput" inputmode="url" autocomplete="off" placeholder="http://192.168.1.42:8080" /></label>
@@ -726,6 +733,13 @@
             <span class="step-number">STEP 01</span>
             <h3>描述你真实观察到的现象</h3>
             <p>写清发生条件和想区分的原因。Agent 不会直接猜答案，而会建立 2–3 个可以被实验区分的候选假设。</p>
+            <aside class="diagnostic-showcase-launcher" aria-labelledby="diagnosticShowcaseTitle">
+              <span>DIAGNOSTIC PUBLIC REPLAY</span>
+              <b id="diagnosticShowcaseTitle">先看一次完整诊断</b>
+              <p>回放洗衣机偏载与机身—地面耦合的两步判别链；每次点击立即提交一轮冻结证据，不等待基模。</p>
+              <button class="button button-secondary" id="showcaseDiagnosticStartButton" type="button"><span>洗衣机诊断 · 2 步</span></button>
+              <small>诊断专属入口 · 非当前家庭证据 · 0 次模型请求</small>
+            </aside>
           </div>
           <div class="setup-form">
             <label><span>案例名称</span><input id="caseTitleInput" maxlength="80" placeholder="例如：洗衣机脱水时地面振动" /></label>
@@ -1001,12 +1015,20 @@
         <span id="modelRunEyebrow">MODEL CONNECTION</span>
         <b id="modelRunTitle">正在连接基模</b>
         <p id="modelRunDetail">PocketLab 正在等待模型服务响应，不会在短时间后自动截断。</p>
-        <small id="modelRunElapsed">已等待 0 秒</small>
+        <div class="model-run-meta"><strong id="modelRunMode">MODE · —</strong><small id="modelRunElapsed">已等待 0 秒</small></div>
       </div>
+      <section class="model-run-stream" id="modelRunStream" hidden>
+        <header><span>LIVE MODEL OUTPUT</span><small id="modelRunStreamMeta">等待首个可见片段</small></header>
+        <div class="model-run-pulse" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+        <p id="modelRunStreamPreview">正在建立真实流式连接…</p>
+        <div class="model-run-stages" id="modelRunStages"></div>
+        <small>只显示模型可见输出与工具阶段；隐藏思维内容不会显示或保存。</small>
+      </section>
       <div class="model-run-decision" id="modelRunDecision" hidden>
-        <p id="modelRunDecisionText">本次等待已超过 2 分钟。你可以让基模继续深度思考，或主动停止并使用明确标记的安全兜底。</p>
+        <p id="modelRunDecisionText">本次等待已超过 2 分钟。High 可继续等待、切换 Fast 或由你主动使用安全兜底；Fast 只能继续等待或由你主动兜底。</p>
         <div>
           <button class="button button-secondary" id="modelRunContinueButton" type="button">继续等待基模</button>
+          <button class="button button-primary" id="modelRunFastButton" type="button">停止 High，改用 Fast</button>
           <button class="button button-quiet" id="modelRunFallbackButton" type="button">立即使用安全兜底</button>
         </div>
       </div>

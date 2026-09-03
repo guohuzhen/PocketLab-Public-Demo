@@ -2566,7 +2566,7 @@ async def compile_general_question(
             ),
             error_kind=reason,
         )
-        if decision == "retry":
+        if decision in {"retry", "retry_fast"}:
             return await compile_general_question(
                 request,
                 agent=agent,
@@ -2575,15 +2575,20 @@ async def compile_general_question(
                 transport=transport,
                 _allow_json_repair=_allow_json_repair,
             )
-        fallback_reason = (
-            "user-requested-fallback"
-            if decision == "user_fallback"
-            else reason
-        )
-        return _fallback_result(
-            request,
-            reason=fallback_reason,
-            runtime=runtime,
+        if decision == "user_fallback":
+            return _fallback_result(
+                request,
+                reason="user-requested-fallback",
+                runtime=runtime,
+            )
+        if runner is not None:
+            # Explicit runner injection is reserved for deterministic offline
+            # Harnesses. It has no access to the browser decision channel.
+            return _fallback_result(request, reason=reason, runtime=runtime)
+        raise AgentRuntimeError(
+            reason,
+            "模型草案未通过服务端契约；未替用户自动启用兜底。",
+            retryable=True,
         )
 
     get_agent_run_traces(clear=True)
@@ -2641,11 +2646,19 @@ async def compile_general_question(
             and not availability_failure
         ):
             return await auto_json_fallback()
-        return _fallback_result(request, reason="provider-unavailable")
-    except RuntimeError:
+        if runner is not None:
+            return _fallback_result(request, reason="provider-unavailable")
+        raise
+    except RuntimeError as exc:
         if transport == "auto" and active_transport == "function_tool":
             return await auto_json_fallback()
-        return _fallback_result(request, reason="provider-unavailable")
+        if runner is not None:
+            return _fallback_result(request, reason="provider-unavailable")
+        raise AgentRuntimeError(
+            "runtime_error",
+            "模型编译请求失败；未替用户自动启用兜底。",
+            retryable=True,
+        ) from exc
 
     runtime = _runtime_snapshot(
         fallback_reason="none",

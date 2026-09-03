@@ -22,7 +22,7 @@ _DEEPSEEK_V4_THINKING_HOSTS = {
     "llmapi.paratera.com",
 }
 
-ReasoningStrategy = Literal["auto", "fast", "deep"]
+ReasoningStrategy = Literal["fast", "high"]
 ReasoningPurpose = Literal["control", "analysis"]
 EffectiveReasoningMode = Literal["fast", "deep", "provider_default"]
 ModelIntegrationStatus = Literal[
@@ -109,9 +109,14 @@ def _is_deepseek_v4_model(model_name: str | None) -> bool:
 
 
 def normalize_reasoning_strategy(value: str | None) -> ReasoningStrategy:
-    normalized = (value or "auto").strip().casefold()
-    if normalized not in {"auto", "fast", "deep"}:
-        raise ValueError("推理策略必须是 auto、fast 或 deep。")
+    normalized = (value or "high").strip().casefold()
+    # ``auto`` and ``deep`` were stored by PocketLab versions before the public
+    # Fast / High selector.  Read them as High so existing profiles keep working
+    # without a destructive database migration.
+    if normalized in {"auto", "deep"}:
+        normalized = "high"
+    if normalized not in {"fast", "high"}:
+        raise ValueError("推理模式必须是 fast 或 high。")
     return cast(ReasoningStrategy, normalized)
 
 
@@ -155,23 +160,21 @@ def provider_reasoning_directive(
     base_url: str,
     model_name: str | None = None,
     *,
-    strategy: ReasoningStrategy = "auto",
+    strategy: ReasoningStrategy = "high",
     purpose: ReasoningPurpose,
 ) -> ProviderReasoningDirective:
     """Select a narrow, provider-safe reasoning mode for one model operation.
 
-    Control-plane operations include routing, schema compilation and tool
-    selection.  They stay fast even under ``deep`` because long hidden reasoning
-    there adds latency and can make multi-turn tool replay provider-specific.
-    Analysis operations contain the actual evidence interpretation and report
-    synthesis.  ``auto`` requests high effort there, while ``deep`` requests the
-    provider's highest verified effort.  Unknown gateways receive no private
-    fields and retain their own default behaviour.
+    Fast and High are user-owned choices for the whole model operation, including
+    routing, planning, evidence interpretation and report synthesis.  High asks
+    verified providers for high reasoning effort; Fast disables thinking where
+    that provider contract is known. Unknown gateways receive no private fields
+    and retain their own default behaviour.
     """
 
     selected_strategy = normalize_reasoning_strategy(strategy)
     hostname = (urlsplit(base_url).hostname or "").casefold().rstrip(".")
-    wants_deep_analysis = purpose == "analysis" and selected_strategy != "fast"
+    wants_deep_analysis = selected_strategy == "high"
 
     if hostname in _NON_REASONING_HINT_HOSTS:
         if wants_deep_analysis:
@@ -205,7 +208,7 @@ def provider_reasoning_directive(
         if wants_deep_analysis:
             return ProviderReasoningDirective(
                 effective_mode="deep",
-                reasoning_effort="max" if selected_strategy == "deep" else "high",
+                reasoning_effort="high",
             )
         return ProviderReasoningDirective(
             effective_mode="fast",

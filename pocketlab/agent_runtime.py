@@ -28,6 +28,10 @@ from pocketlab.model_run_control import (
     ModelFallbackRequested,
     await_model_with_user_control,
     current_model_run_id,
+    current_model_run_reasoning_mode,
+    record_model_reasoning_activity,
+    record_model_stream_delta,
+    record_model_stream_stage,
 )
 from pocketlab.provider_compat import reasoning_metadata_from_model_settings
 
@@ -283,14 +287,28 @@ def is_committed_tool_output(output: object) -> bool:
         payload = json.loads(str(output))
     except (TypeError, json.JSONDecodeError):
         return False
-    return isinstance(payload, dict) and payload.get("status") == "committed"
+    return _is_consistent_committed_payload(payload)
+
+
+def _is_consistent_committed_payload(payload: object) -> bool:
+    if not isinstance(payload, dict) or payload.get("status") != "committed":
+        return False
+    if payload.get("success") is False:
+        return False
+    return payload.get("error") in (None, "", False)
 
 
 def _safe_error(error: BaseException) -> str:
     text = str(error)
     text = re.sub(r"sk-[A-Za-z0-9_-]{8,}", "[REDACTED_SECRET]", text)
     text = re.sub(
-        r"(?i)(authorization|api[_-]?key|bearer)(\s*[:=]\s*|\s+)[^\s,;]+",
+        r"(?i)(authorization|api[_-]?key|bearer|access[_-]?token|refresh[_-]?token|"
+        r"client[_-]?secret)(\s*[:=]\s*|\s+)[^\s,;]+",
+        r"\1=[REDACTED_SECRET]",
+        text,
+    )
+    text = re.sub(
+        r"(?i)(token|secret)(\s*[:=]\s*)[^\s,;]+",
         r"\1=[REDACTED_SECRET]",
         text,
     )
@@ -347,10 +365,14 @@ def _tool_events(result: Any) -> list[dict[str, str]]:
             except json.JSONDecodeError:
                 payload = None
             if isinstance(payload, dict):
-                if payload.get("status") == "committed":
-                    status = "committed"
-                elif "error" in payload:
+                if payload.get("success") is False or payload.get("error") not in (
+                    None,
+                    "",
+                    False,
+                ):
                     status = "error"
+                elif _is_consistent_committed_payload(payload):
+                    status = "committed"
             if item.call_id and item.call_id in calls_by_id:
                 events[calls_by_id[item.call_id]]["status"] = status
             else:
@@ -375,6 +397,81 @@ def _estimated_cost(
         + output_tokens * policy.output_cost_per_million
     ) / 1_000_000
     return round(value, 8)
+
+
+async def _run_streamed_agent(
+    agent: Agent[Any],
+    input_payload: str,
+    **runner_kwargs: Any,
+) -> Any:
+    """Drain Agents SDK events while exposing only safe, visible progress."""
+
+    result = Runner.run_streamed(agent, input_payload, **runner_kwargs)
+    try:
+        async for event in result.stream_events():
+            event_type = getattr(event, "type", "")
+            if event_type == "raw_response_event":
+                data = getattr(event, "data", None)
+                data_type = str(getattr(data, "type", ""))
+                delta = str(getattr(data, "delta", "") or "")
+                if data_type in {"response.output_text.delta", "response.refusal.delta"}:
+                    record_model_stream_delta(delta)
+                elif data_type == "response.function_call_arguments.delta":
+                    record_model_stream_delta(delta, kind="tool")
+                elif data_type in {
+                    "response.reasoning_text.delta",
+                    "response.reasoning_summary_text.delta",
+                }:
+                    # Hidden reasoning contents are intentionally discarded.
+                    record_model_reasoning_activity()
+            elif event_type == "run_item_stream_event":
+                name = str(getattr(event, "name", ""))
+                item = getattr(event, "item", None)
+                if name == "tool_called":
+                    record_model_stream_stage(
+                        "TOOL CALL",
+                        f"正在执行 {getattr(item, 'tool_name', None) or '受控工具'}",
+                    )
+                elif name == "tool_output":
+                    record_model_stream_stage(
+                        "TOOL RESULT",
+                        "工具结果已返回，基模将据此继续组织答案",
+                    )
+                elif name == "message_output_created":
+                    record_model_stream_stage(
+                        "MODEL OUTPUT",
+                        "本轮可见输出已完成，正在进入服务端整理",
+                    )
+            elif event_type == "agent_updated_stream_event":
+                record_model_stream_stage("AGENT ROUTE", "Agent 已进入下一处理阶段")
+        return result
+    finally:
+        if not result.is_complete:
+            result.cancel()
+
+
+def _clone_agent_for_fast_mode(agent: Agent[Any] | Any) -> Agent[Any] | Any:
+    settings = getattr(agent, "model_settings", None)
+    clone = getattr(agent, "clone", None)
+    if settings is None or not callable(clone):
+        return agent
+    extra_body = dict(getattr(settings, "extra_body", None) or {})
+    thinking = extra_body.get("thinking")
+    if isinstance(thinking, Mapping):
+        extra_body["thinking"] = {**thinking, "type": "disabled"}
+    if isinstance(extra_body.get("enable_thinking"), bool):
+        extra_body["enable_thinking"] = False
+    updates: dict[str, Any] = {
+        "extra_body": extra_body or None,
+        "temperature": (
+            getattr(settings, "temperature", None)
+            if getattr(settings, "temperature", None) is not None
+            else 0.1
+        ),
+    }
+    if getattr(settings, "reasoning", None) is not None:
+        updates["reasoning"] = {"effort": "low"}
+    return clone(model_settings=replace(settings, **updates))
 
 
 async def run_bounded_agent(
@@ -452,7 +549,7 @@ async def _run_bounded_agent_unlimited(
     """Run an agent with bounded turns/time and privacy-safe local tracing."""
 
     active_policy = policy or load_agent_runtime_policy()
-    active_runner = runner or Runner.run
+    active_runner = runner or _run_streamed_agent
     retry_limit = active_policy.read_only_retries if allow_retry else 0
     run_id = f"run-{uuid4().hex}"
     started_at = datetime.now(UTC).isoformat()
@@ -467,11 +564,20 @@ async def _run_bounded_agent_unlimited(
     reasoning_mode, reasoning_effort = reasoning_metadata_from_model_settings(
         getattr(agent, "model_settings", None)
     )
+    configured_run_mode: Literal["fast", "high", "provider_default"] = (
+        "high"
+        if reasoning_mode == "deep"
+        else reasoning_mode
+        if reasoning_mode == "fast"
+        else "provider_default"
+    )
+    supports_fast_switch = runner is None and configured_run_mode == "high"
+    fast_agent: Agent[Any] | Any | None = None
     if context is not None:
         runner_kwargs["context"] = context
 
     def build_runner_awaitable() -> Awaitable[Any]:
-        nonlocal interactive_runner_attempt, last_max_turns
+        nonlocal fast_agent, interactive_runner_attempt, last_max_turns
         call_kwargs = dict(runner_kwargs)
         if interactive_wait and interactive_runner_attempt:
             call_kwargs["max_turns"] = min(
@@ -480,7 +586,15 @@ async def _run_bounded_agent_unlimited(
             )
         last_max_turns = int(call_kwargs["max_turns"])
         interactive_runner_attempt += 1
-        return active_runner(agent, input_payload, **call_kwargs)
+        active_agent = agent
+        if (
+            supports_fast_switch
+            and current_model_run_reasoning_mode(configured_run_mode) == "fast"
+        ):
+            if fast_agent is None:
+                fast_agent = _clone_agent_for_fast_mode(agent)
+            active_agent = fast_agent
+        return active_runner(active_agent, input_payload, **call_kwargs)
 
     for attempt_number in range(1, retry_limit + 2):
         attempt_started = time.perf_counter()
@@ -493,6 +607,8 @@ async def _run_bounded_agent_unlimited(
                 model=model_name,
                 noninteractive_timeout_s=remaining_s,
                 awaitable_factory=build_runner_awaitable,
+                reasoning_mode=configured_run_mode,
+                supports_fast_switch=supports_fast_switch,
             )
         except asyncio.CancelledError:
             elapsed = round(time.perf_counter() - started, 4)
@@ -567,6 +683,14 @@ async def _run_bounded_agent_unlimited(
                 retryable=retryable,
             ) from exc
 
+        effective_reasoning_mode = (
+            "fast"
+            if current_model_run_reasoning_mode(configured_run_mode) == "fast"
+            else reasoning_mode
+        )
+        effective_reasoning_effort = (
+            "low" if effective_reasoning_mode == "fast" else reasoning_effort
+        )
         attempts.append(
             AgentAttemptTrace(
                 attempt=attempt_number,
@@ -587,8 +711,8 @@ async def _run_bounded_agent_unlimited(
             timeout_s=effective_timeout_s,
             max_turns=last_max_turns,
             retry_limit=retry_limit,
-            reasoning_mode=reasoning_mode,
-            reasoning_effort=reasoning_effort,
+            reasoning_mode=effective_reasoning_mode,
+            reasoning_effort=effective_reasoning_effort,
             attempts=attempts,
             model_requests=len(getattr(result, "raw_responses", [])),
             tool_calls=len(tool_events),

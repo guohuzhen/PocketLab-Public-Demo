@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any, Protocol
 from uuid import uuid4
 
+from pocketlab.agent_runtime import AgentRuntimeError
+from pocketlab.model_run_control import await_model_validation_recovery_decision
 from pocketlab.public_gyroscope_tools import (
     ANALYZE_TOOL_ID,
     ANCHOR_RECORDING_ID,
@@ -83,9 +85,7 @@ class PublicSensorPlannerOutcome(Protocol):
     runtime_trace: dict[str, Any]
 
 
-PlannerCallable = Callable[
-    [PublicSensorPlannerRequest], Awaitable[PublicSensorPlannerOutcome]
-]
+PlannerCallable = Callable[[PublicSensorPlannerRequest], Awaitable[PublicSensorPlannerOutcome]]
 
 
 class PublicSensorExplorationUnavailable(RuntimeError):
@@ -335,8 +335,7 @@ def _safe_runtime_trace(value: object) -> PublicSensorRuntimeTrace | None:
     safe: dict[str, object] = {
         key: item
         for key, item in value.items()
-        if key in _SAFE_RUNTIME_KEYS
-        and (item is None or isinstance(item, (str, int, float, bool)))
+        if key in _SAFE_RUNTIME_KEYS and (item is None or isinstance(item, (str, int, float, bool)))
     }
     tool_events = value.get("tool_events")
     if isinstance(tool_events, list):
@@ -379,7 +378,11 @@ async def _select_candidate(
         if not isinstance(decision, PublicSensorPlannerDecision):
             raise _PlannerDecisionRejected
         selected = next(
-            (item for item in request.candidates if item.candidate_id == decision.selected_candidate_id),
+            (
+                item
+                for item in request.candidates
+                if item.candidate_id == decision.selected_candidate_id
+            ),
             None,
         )
         if (
@@ -403,13 +406,35 @@ async def _select_candidate(
             transport=(
                 str(runtime_trace.get("transport"))
                 if isinstance(runtime_trace, dict)
-                and runtime_trace.get("transport")
-                in {"function_tool", "validated_json_text"}
+                and runtime_trace.get("transport") in {"function_tool", "validated_json_text"}
                 else "not_attempted"
             ),
             runtime_trace=_safe_runtime_trace(runtime_trace),
         )
     except (ImportError, OSError, RuntimeError, TypeError, ValueError) as exc:
+        reason = _fallback_reason(exc)
+        if planner is None and reason not in {
+            "user-fallback",
+            "user-requested-fallback",
+        }:
+            recovery = await await_model_validation_recovery_decision(
+                detail=(
+                    "公开传感器实验的基模规划未通过候选约束。请选择重试基模、"
+                    "切换 Fast，或明确使用冻结的强工作流步骤。"
+                ),
+                error_kind=reason,
+            )
+            if recovery in {"retry", "retry_fast"}:
+                return await _select_candidate(request, planner=None)
+            if recovery != "user_fallback":
+                raise AgentRuntimeError(
+                    "malformed_model_output",
+                    "公开传感器规划未完成；PocketLab 未替用户自动启用回退。",
+                    retryable=True,
+                ) from exc
+            reason = "user-requested-fallback"
+        elif planner is None:
+            reason = "user-requested-fallback"
         fallback = next(item for item in request.candidates if item.candidate_id == fallback_id)
         return fallback_id, PublicSensorPlannerTrace(
             step=request.step,
@@ -421,7 +446,7 @@ async def _select_candidate(
             rationale_code=fallback.rationale_code,
             source="strong_workflow_fallback",
             outcome="fallback",
-            fallback_reason=_fallback_reason(exc),
+            fallback_reason=reason,
             runtime_trace=_safe_runtime_trace(getattr(exc, "runtime_trace", None)),
         )
 
@@ -688,9 +713,7 @@ async def run_public_sensor_exploration(
     )
     if family in {"live", "unsupported"}:
         selected_id = first_request.fallback_candidate_id
-        candidate = next(
-            item for item in initial_candidates if item.candidate_id == selected_id
-        )
+        candidate = next(item for item in initial_candidates if item.candidate_id == selected_id)
         first_trace = PublicSensorPlannerTrace(
             step=1,
             operation="select_evidence_route",
@@ -728,9 +751,7 @@ async def run_public_sensor_exploration(
             protocol_id=_PROTOCOL_ID,
             run_id=run_id,
             research_question=request.research_question,
-            execution_status=(
-                "unsupported" if terminal_family == "unsupported" else "limited"
-            ),
+            execution_status=("unsupported" if terminal_family == "unsupported" else "limited"),
             selected_route_id=selected_id,
             planner_status=_planner_status((first_trace,)),
             planner_trace=(first_trace,),
@@ -743,9 +764,7 @@ async def run_public_sensor_exploration(
             selected_candidate.recording_ids,
         )
     except (OSError, StopIteration, ValueError) as exc:
-        raise PublicSensorExplorationUnavailable(
-            "source-or-tool-validation-failed"
-        ) from exc
+        raise PublicSensorExplorationUnavailable("source-or-tool-validation-failed") from exc
 
     follow_candidates = _follow_candidates()
     follow_fallback = _FINISH_ID if comparison.quality_passed else _LIVE_ID
@@ -800,9 +819,7 @@ async def run_public_sensor_exploration(
         run_id=run_id,
         research_question=request.research_question,
         execution_status=(
-            "completed"
-            if report.conclusion_kind == "supported_with_limits"
-            else "limited"
+            "completed" if report.conclusion_kind == "supported_with_limits" else "limited"
         ),
         selected_route_id=follow_id,
         planner_status=_planner_status(traces),

@@ -28,6 +28,7 @@ GeneralSimulationProfile = Literal[
     "clear_contrast",
     "near_equal",
     "reversed_contrast",
+    "inverse_square_light",
 ]
 
 
@@ -101,6 +102,7 @@ def _condition_scale(
         "clear_contrast": 1.8,
         "near_equal": 1.015,
         "reversed_contrast": 0.55,
+        "inverse_square_light": 0.255,
     }[profile]
     return comparison + repeat_offset
 

@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import math
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import uvicorn
@@ -18,6 +19,7 @@ from pocketlab.active_experiment_design import (
 )
 from pocketlab.agent import (
     DiagnosticProposalUnavailable,
+    close_shared_model_clients,
     get_active_model_name,
     run_diagnostic_finalization_agent,
     run_diagnostic_intake_agent,
@@ -144,6 +146,7 @@ from pocketlab.model_profiles import (
     ModelProfileNotFound,
     ModelProfileSummary,
     ModelProfileUpdate,
+    ModelReasoningStrategyUpdate,
     ModelSecretUnavailable,
     environment_model_configuration,
     model_profile_store,
@@ -153,6 +156,7 @@ from pocketlab.model_run_control import (
     ModelRunDecisionRequest,
     decide_model_run,
     get_model_run_status,
+    mark_model_run_finished,
     model_run_context,
     validate_model_run_id,
 )
@@ -255,6 +259,13 @@ from pocketlab.sensor_models import (
     SensorSample,
 )
 from pocketlab.settings import settings_store
+from pocketlab.showcase_replays import (
+    GeneralShowcaseAdvanceRequest,
+    advance_diagnostic_showcase,
+    advance_general_showcase,
+    create_diagnostic_showcase,
+    create_general_showcase,
+)
 from pocketlab.store import session_store
 from pocketlab.work_summaries import (
     WorkSummary,
@@ -265,7 +276,16 @@ from pocketlab.work_summaries import (
 WEB_DIR = Path(__file__).resolve().parent / "web"
 PUBLIC_REPLAY_DIR = Path(__file__).resolve().parent.parent / "datasets" / "public"
 
-app = FastAPI(title="PocketLab Agent", version="0.9.0")
+
+@asynccontextmanager
+async def _app_lifespan(_app: FastAPI):
+    try:
+        yield
+    finally:
+        await close_shared_model_clients()
+
+
+app = FastAPI(title="PocketLab Agent", version="0.9.0", lifespan=_app_lifespan)
 
 
 @app.exception_handler(GeneralReasonerUnavailable)
@@ -303,6 +323,8 @@ async def agent_runtime_error_handler(
             }
         },
     )
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -333,7 +355,10 @@ async def bind_authenticated_user(request: Request, call_next):
     except ValueError as exc:
         return JSONResponse(status_code=400, content={"detail": str(exc)})
     with user_context(account.user_id), model_run_context(model_run_id, path):
-        return await call_next(request)
+        response = await call_next(request)
+        if model_run_id is not None and response.status_code < 400:
+            mark_model_run_finished()
+        return response
 
 
 def _auth_user(account: Account) -> AuthUser:
@@ -818,9 +843,7 @@ async def compile_general_exploration_question(
     if has_clarification_resolution != (request.clarification_receipt_id is not None):
         raise HTTPException(
             status_code=422,
-            detail=(
-                "补充澄清必须携带上一轮的一次性凭证；凭证也不能脱离结构化补充单独使用。"
-            ),
+            detail=("补充澄清必须携带上一轮的一次性凭证；凭证也不能脱离结构化补充单独使用。"),
         )
     reservation = None
     if has_clarification_resolution:
@@ -842,10 +865,7 @@ async def compile_general_exploration_question(
         result.status == "needs_clarification"
         and result.source == "bounded_agent"
         and result.runtime.fallback_reason == "none"
-        and (
-            not finite_result_codes
-            or not finite_result_codes <= set(GENERAL_CLARIFICATION_CODES)
-        )
+        and (not finite_result_codes or not finite_result_codes <= set(GENERAL_CLARIFICATION_CODES))
     )
     if unactionable_agent_clarification:
         result = GeneralQuestionCompileResult.model_validate(
@@ -920,6 +940,49 @@ def create_general_exploration(
             },
         ) from exc
     except GeneralExplorationConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post(
+    "/api/v2/showcase-replays/exploration",
+    response_model=GeneralExperimentCase,
+)
+def start_general_showcase_replay() -> GeneralExperimentCase:
+    """Create a zero-model, server-owned light exploration walkthrough."""
+
+    try:
+        return create_general_showcase(general_exploration_store)
+    except GeneralExplorationValidation as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except GeneralExplorationConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post(
+    "/api/v2/showcase-replays/exploration/{case_id}/tasks/{task_id}",
+    response_model=GeneralSimulationMeasurementResponse,
+)
+def advance_general_showcase_replay(
+    case_id: str,
+    task_id: str,
+    request: GeneralShowcaseAdvanceRequest,
+) -> GeneralSimulationMeasurementResponse:
+    """Commit one frozen exploration step without issuing a provider request."""
+
+    try:
+        return advance_general_showcase(
+            general_exploration_store,
+            case_id=case_id,
+            expected_revision=request.expected_revision,
+            task_id=task_id,
+        )
+    except GeneralExplorationNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except GeneralExplorationConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except GeneralExplorationValidation as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
@@ -1144,9 +1207,7 @@ async def revise_general_exploration_from_reality_feedback(
         context=revised_context(
             original_context="",
             feedback=request,
-            rejected_hypotheses=tuple(
-                hypothesis_by_id[item] for item in request.hypothesis_ids
-            ),
+            rejected_hypotheses=tuple(hypothesis_by_id[item] for item in request.hypothesis_ids),
             task_title=source.current_task.title if source.current_task else None,
             limit=1200,
             evidence_reuse=evidence_reuse,
@@ -1177,9 +1238,7 @@ async def revise_general_exploration_from_reality_feedback(
     if sensitive_sensors and not request.confirm_sensitive_sensor_reuse:
         raise HTTPException(
             status_code=422,
-            detail=(
-                "新计划需要麦克风或位置传感器。请确认只保留协议所需派生结果后再提交。"
-            ),
+            detail=("新计划需要麦克风或位置传感器。请确认只保留协议所需派生结果后再提交。"),
         )
     receipt_id = None
     if result.source == "bounded_agent":
@@ -1741,9 +1800,7 @@ async def analyze_evidence_workbench(
         sensors.append(recording.sensor)
     if missing:
         raise HTTPException(status_code=404, detail={"missing_recording_ids": missing})
-    audits, comparability, contrasts, quality, boundaries = build_evidence_audit(
-        recordings
-    )
+    audits, comparability, contrasts, quality, boundaries = build_evidence_audit(recordings)
     citations, comparability_matrix, charts = build_evidence_presentation(
         audits,
         comparability,
@@ -1753,7 +1810,7 @@ async def analyze_evidence_workbench(
         answer = await run_evidence_workbench(request.question, request.recording_ids)
         analysis_status = "model_generated"
     except AgentRuntimeError as exc:
-        if exc.kind == "concurrency_limit":
+        if exc.kind != "user_fallback":
             raise
         answer = deterministic_workbench_answer(
             request.question,
@@ -1762,14 +1819,12 @@ async def analyze_evidence_workbench(
             quality,
         )
         analysis_status = "deterministic_only"
-    except RuntimeError:
-        answer = deterministic_workbench_answer(
-            request.question,
-            audits,
-            comparability,
-            quality,
-        )
-        analysis_status = "deterministic_only"
+    except RuntimeError as exc:
+        raise AgentRuntimeError(
+            "runtime_error",
+            "证据报告基模生成未完成；PocketLab 未替用户自动启用兜底。",
+            retryable=True,
+        ) from exc
     return evidence_workbench_store.create_report(
         question=request.question,
         answer=answer,
@@ -1856,6 +1911,42 @@ async def create_diagnostic_case(request: DiagnosticCaseCreate) -> DiagnosticAge
         agent_message=agent_message,
         model=get_active_model_name(),
     )
+
+
+@app.post(
+    "/api/v2/showcase-replays/diagnostic",
+    response_model=DiagnosticAgentResponse,
+)
+def start_diagnostic_showcase_replay() -> DiagnosticAgentResponse:
+    """Create a zero-model, server-owned washing-machine diagnosis walkthrough."""
+
+    try:
+        return create_diagnostic_showcase(diagnostic_case_store)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post(
+    "/api/v2/showcase-replays/diagnostic/{case_id}/tasks/{task_id}",
+    response_model=DiagnosticSensorTaskResponse,
+)
+def advance_diagnostic_showcase_replay(
+    case_id: str,
+    task_id: str,
+) -> DiagnosticSensorTaskResponse:
+    """Commit one frozen diagnostic recording without issuing a provider request."""
+
+    try:
+        return advance_diagnostic_showcase(
+            diagnostic_case_store,
+            session_store,
+            case_id=case_id,
+            task_id=task_id,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.post(
@@ -1993,13 +2084,10 @@ async def submit_diagnostic_measurement(
     )
     if already_committed is not None:
         snapshot = diagnostic_case_store.get_snapshot(case_id)
-        agent_message = (
-            snapshot.latest_agent_message
-            or (
-                before.final_report.conclusion
-                if before.final_report is not None
-                else "这条测量已在之前的请求中保存；没有重复运行 Agent 或写入证据。"
-            )
+        agent_message = snapshot.latest_agent_message or (
+            before.final_report.conclusion
+            if before.final_report is not None
+            else "这条测量已在之前的请求中保存；没有重复运行 Agent 或写入证据。"
         )
         return DiagnosticAgentResponse(
             case=before,
@@ -2196,7 +2284,8 @@ async def replay_public_diagnostic_task(
     if task is None or task.task_id != task_id:
         raise HTTPException(status_code=409, detail="diagnostic task is no longer current")
     matching = [
-        item for item in list_public_replay_catalog(PUBLIC_REPLAY_DIR)
+        item
+        for item in list_public_replay_catalog(PUBLIC_REPLAY_DIR)
         if item.sensor == task.required_sensor
     ]
     if request.dataset_id is not None:
@@ -2240,9 +2329,7 @@ async def replay_public_diagnostic_task(
             if (manifest.dataset_id, item.recording_id) not in used_recordings
         ]
         if request.recording_id is not None:
-            available = [
-                item for item in available if item.recording_id == request.recording_id
-            ]
+            available = [item for item in available if item.recording_id == request.recording_id]
             explicit_recording_seen = explicit_recording_seen or bool(available)
         if not available:
             continue
@@ -2323,7 +2410,9 @@ async def decide_diagnostic_checkpoint(
     message = (
         "已按你的选择继续诊断；下一项是 Agent 在检查点前选出的最高信息价值任务。"
         if request.decision == "continue"
-        else case.final_report.conclusion if case.final_report else "诊断已按用户选择结束。"
+        else case.final_report.conclusion
+        if case.final_report
+        else "诊断已按用户选择结束。"
     )
     diagnostic_case_store.set_latest_agent_message(case_id, message)
     return DiagnosticAgentResponse(
@@ -2472,6 +2561,19 @@ def get_model_profiles() -> ModelProfileCatalog:
     return model_profile_store.catalog()
 
 
+@app.put(
+    "/api/v1/settings/models/active-mode",
+    response_model=ModelProfileCatalog,
+)
+def update_active_model_reasoning_strategy(
+    request: ModelReasoningStrategyUpdate,
+) -> ModelProfileCatalog:
+    try:
+        return model_profile_store.set_active_reasoning_strategy(request.reasoning_strategy)
+    except ModelProfileError as exc:
+        _raise_model_profile_http_error(exc)
+
+
 @app.get("/api/v1/settings/agent-runs", response_model=AgentRunAuditCatalog)
 def get_agent_run_audits(limit: int = 30) -> AgentRunAuditCatalog:
     return agent_run_audit_store.catalog(limit=min(max(limit, 1), 100))
@@ -2525,7 +2627,7 @@ def activate_model_profile(profile_id: str) -> ModelProfileCatalog:
 async def probe_model_profile(profile_id: str) -> ModelCapabilityProbe:
     try:
         if profile_id == ENVIRONMENT_PROFILE_ID:
-            config = environment_model_configuration()
+            config = model_profile_store.resolve_environment()
             if config is None:
                 raise HTTPException(status_code=409, detail="系统环境模型尚未完整配置。")
             return await probe_model_compatibility(config)

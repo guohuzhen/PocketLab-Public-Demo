@@ -42,7 +42,11 @@ from pocketlab.general_exploration_state import (
     GeneralPlannerRuntimeSnapshot,
     PreparedGeneralTransition,
 )
-from pocketlab.model_run_control import ModelFallbackRequested, await_model_with_user_control
+from pocketlab.model_run_control import (
+    ModelFallbackRequested,
+    await_model_validation_recovery_decision,
+    await_model_with_user_control,
+)
 from pocketlab.provider_compat import provider_reasoning_directive
 from pocketlab.sensor_models import SensorKind
 
@@ -50,6 +54,8 @@ _IDENTIFIER = r"^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$"
 _SHA256 = r"^[0-9a-f]{64}$"
 GeneralPlannerTransport = Literal["auto", "function_tool", "validated_json_text"]
 _AUTO_TRANSPORT_PREFERENCE: Literal["function_tool", "validated_json_text"] | None = None
+
+
 class GeneralPlannerCandidateView(StrictFrozenModel):
     candidate_id: str = Field(pattern=_IDENTIFIER, max_length=80)
     action: Literal[
@@ -1352,6 +1358,33 @@ async def commit_with_general_exploration_planner(
             policy=policy,
         )
     except GeneralPlannerUnavailable as exc:
+        injected_harness = agent is not None or runner is not None
+        if exc.reason != "user-requested-fallback" and not injected_harness:
+            recovery = await await_model_validation_recovery_decision(
+                detail=(
+                    "基模未能产生可采纳的探索规划。请选择重试基模、切换 Fast，"
+                    "或明确接受标记为兜底的协议默认步骤。"
+                ),
+                error_kind=exc.reason,
+            )
+            if recovery in {"retry", "retry_fast"}:
+                return await commit_with_general_exploration_planner(
+                    prepared,
+                    agent=agent,
+                    runner=runner,
+                    policy=policy,
+                )
+            if recovery == "user_fallback":
+                exc = GeneralPlannerUnavailable(
+                    "user-requested-fallback",
+                    exc.runtime_trace,
+                )
+            else:
+                raise AgentRuntimeError(
+                    exc.reason.replace("-", "_"),
+                    "探索规划未完成；PocketLab 未替用户自动启用确定性兜底。",
+                    retryable=True,
+                ) from exc
         audit = GeneralPlannerDecisionAudit(
             expected_revision=request.expected_revision,
             commit_revision=request.expected_revision + 1,

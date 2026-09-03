@@ -15,6 +15,7 @@ from pocketlab.agent_runtime import (
     load_agent_runtime_policy,
     run_bounded_agent,
 )
+from pocketlab.model_run_control import await_model_validation_recovery_decision
 from pocketlab.provider_compat import provider_reasoning_directive
 from pocketlab.sensor_models import SensorKind
 
@@ -182,11 +183,7 @@ def _suggest_title(question: str) -> str:
 
 
 def _suggested_sensors(text: str) -> list[SensorKind]:
-    return [
-        sensor
-        for sensor, terms in _SENSOR_TERMS
-        if any(term in text for term in terms)
-    ][:4]
+    return [sensor for sensor, terms in _SENSOR_TERMS if any(term in text for term in terms)][:4]
 
 
 def _sensitive_sensor_notice(sensors: list[SensorKind]) -> str | None:
@@ -280,13 +277,9 @@ def _model_recommendation(
     sensors = _suggested_sensors(text)
     reasons = list(decision.reasons)
     if sensors and len(reasons) < 6:
-        reasons.append(
-            f"题面提到的候选传感器共 {len(sensors)} 类；最终选择仍由对应流程校验。"
-        )
+        reasons.append(f"题面提到的候选传感器共 {len(sensors)} 类；最终选择仍由对应流程校验。")
     alternative: Literal["diagnostic", "exploration"] = (
-        "exploration"
-        if decision.recommended_workflow == "diagnostic"
-        else "diagnostic"
+        "exploration" if decision.recommended_workflow == "diagnostic" else "diagnostic"
     )
     return InvestigationRouteRecommendation(
         recommended_workflow=decision.recommended_workflow,
@@ -315,7 +308,7 @@ async def route_investigation_with_model(
     model_name: str | None = None,
     policy: AgentRuntimePolicy | None = None,
 ) -> InvestigationRouteRecommendation:
-    """Use the active model as the primary router; disclose any deterministic fallback."""
+    """Use the active model as the primary router; fallback requires user consent."""
 
     active_model_name = model_name or get_active_model_name()
     payload = json.dumps(
@@ -330,18 +323,27 @@ async def route_investigation_with_model(
     )
     runtime_policy = policy or investigation_router_runtime_policy()
 
-    def deterministic_model_fallback() -> InvestigationRouteRecommendation:
+    injected_harness = strict_agent is not None or json_agent is not None
+
+    def deterministic_model_fallback(
+        reason: str = "model-routing-unavailable",
+    ) -> InvestigationRouteRecommendation:
         fallback = route_investigation(request)
+        user_requested = reason == "user-requested-fallback"
         return fallback.model_copy(
             update={
                 "reasons": [
-                    "当前基模判别未完成，已使用确定性安全降级；该结果没有伪装成基模结论。",
+                    (
+                        "你已明确选择安全兜底；以下为确定性分流，不是基模结论。"
+                        if user_requested
+                        else "离线 Harness 已使用确定性安全降级；该结果没有伪装成基模结论。"
+                    ),
                     *fallback.reasons[:5],
                 ],
                 "decision_source": "deterministic_fallback",
                 "model_transport": "deterministic_fallback",
                 "model_name": active_model_name,
-                "fallback_reason": "model-routing-unavailable",
+                "fallback_reason": reason,
             }
         )
 
@@ -364,11 +366,18 @@ async def route_investigation_with_model(
             transport="structured_output",
         )
     except AgentRuntimeError as exc:
-        # A timeout or provider outage is shared by both output contracts.
-        # Reissuing the same semantic request as JSON only doubles the wait; JSON
-        # fallback is reserved for actual schema/tool compatibility failures.
-        if exc.kind in {"timeout", "connection", "rate_limit", "provider_5xx"}:
+        if exc.kind == "user_fallback":
+            return deterministic_model_fallback("user-requested-fallback")
+        availability_failure = exc.kind in {
+            "timeout",
+            "connection",
+            "rate_limit",
+            "provider_5xx",
+        }
+        if availability_failure and injected_harness:
             return deterministic_model_fallback()
+        if availability_failure and not injected_harness:
+            raise
     except (
         RuntimeError,
         TypeError,
@@ -396,15 +405,43 @@ async def route_investigation_with_model(
             model_name=active_model_name,
             transport="validated_json_text",
         )
+    except AgentRuntimeError as exc:
+        if exc.kind == "user_fallback":
+            return deterministic_model_fallback("user-requested-fallback")
+        if injected_harness:
+            return deterministic_model_fallback()
+        raise
     except (
-        AgentRuntimeError,
         RuntimeError,
         TypeError,
         ValueError,
         ValidationError,
         json.JSONDecodeError,
-    ):
-        return deterministic_model_fallback()
+    ) as exc:
+        if injected_harness:
+            return deterministic_model_fallback()
+        recovery = await await_model_validation_recovery_decision(
+            detail=(
+                "基模已完成分流生成，但结果未通过结构与安全契约。请选择重试基模、"
+                "切换 Fast，或明确接受标记为兜底的确定性分流。"
+            ),
+            error_kind="model-routing-invalid",
+        )
+        if recovery in {"retry", "retry_fast"}:
+            return await route_investigation_with_model(
+                request,
+                strict_agent=strict_agent,
+                json_agent=json_agent,
+                model_name=model_name,
+                policy=policy,
+            )
+        if recovery == "user_fallback":
+            return deterministic_model_fallback("user-requested-fallback")
+        raise AgentRuntimeError(
+            "malformed_model_output",
+            "基模分流未通过服务端契约；PocketLab 未替用户自动启用兜底。",
+            retryable=True,
+        ) from exc
 
 
 def route_investigation(
@@ -414,9 +451,7 @@ def route_investigation(
     text = f"{request.question} {request.context}".casefold()
     diagnostic_score, diagnostic_hits = _score(text, _DIAGNOSTIC_TERMS)
     exploration_score, exploration_hits = _score(text, _EXPLORATION_TERMS)
-    explicit_diagnostic_action = any(
-        token in text for token in _DIAGNOSTIC_ACTION_TERMS
-    )
+    explicit_diagnostic_action = any(token in text for token in _DIAGNOSTIC_ACTION_TERMS)
     if explicit_diagnostic_action:
         diagnostic_score += 6
         # Words such as “变化、影响、测量” describe evidence but do not turn

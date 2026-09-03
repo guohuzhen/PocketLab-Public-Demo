@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -10,6 +11,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal, TypeVar, get_args
 from urllib.parse import urlparse
+from weakref import WeakKeyDictionary
 
 from agents import (
     Agent,
@@ -20,7 +22,6 @@ from agents import (
     set_tracing_disabled,
 )
 from agents.agent import ToolsToFinalOutputResult
-from agents.strict_schema import ensure_strict_json_schema
 from dotenv import load_dotenv
 from openai import (
     APIConnectionError,
@@ -55,7 +56,9 @@ from pocketlab.model_run_control import (
     await_model_validation_recovery_decision,
     await_model_with_user_control,
     current_model_run_id,
+    current_model_run_reasoning_mode,
 )
+from pocketlab.model_streaming import consume_chat_completion
 from pocketlab.provider_compat import (
     ReasoningStrategy,
     normalize_reasoning_strategy,
@@ -95,7 +98,7 @@ class ModelConfig:
     api_key: str
     base_url: str
     model_name: str
-    reasoning_strategy: ReasoningStrategy = "auto"
+    reasoning_strategy: ReasoningStrategy = "high"
 
 
 def _first_nonempty(env: Mapping[str, str], *names: str) -> str | None:
@@ -136,7 +139,7 @@ def load_model_config(env: Mapping[str, str] | None = None) -> ModelConfig:
         raise RuntimeError("未找到模型名称；请在 .env.local 中配置 LLM_MODEL。")
     try:
         reasoning_strategy = normalize_reasoning_strategy(
-            values.get("LLM_REASONING_STRATEGY", "auto")
+            values.get("LLM_REASONING_STRATEGY", "high")
         )
     except ValueError as exc:
         raise RuntimeError(str(exc)) from exc
@@ -148,8 +151,13 @@ def load_model_config(env: Mapping[str, str] | None = None) -> ModelConfig:
     )
 
 
-def build_chat_completions_model(config: ModelConfig) -> OpenAIChatCompletionsModel:
-    client = AsyncOpenAI(
+_MODEL_CLIENTS_BY_LOOP: WeakKeyDictionary[object, dict[tuple[str, int], AsyncOpenAI]] = (
+    WeakKeyDictionary()
+)
+
+
+def _new_model_client(config: ModelConfig) -> AsyncOpenAI:
+    return AsyncOpenAI(
         api_key=config.api_key,
         base_url=config.base_url,
         # Browser requests are user-controlled and must not inherit the SDK's
@@ -160,6 +168,47 @@ def build_chat_completions_model(config: ModelConfig) -> OpenAIChatCompletionsMo
         # recovery in the explicit, auditable operation-level retry policy.
         max_retries=0,
     )
+
+
+def get_shared_model_client(config: ModelConfig) -> AsyncOpenAI:
+    """Reuse provider connections inside one server event loop.
+
+    The cache key contains only a one-way digest plus the active client factory
+    identity, never a raw credential. Per-loop scoping avoids carrying network
+    transports across independent test or server loops.
+    """
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return _new_model_client(config)
+    digest = hashlib.sha256(f"{config.base_url}\0{config.api_key}".encode()).hexdigest()
+    bucket = _MODEL_CLIENTS_BY_LOOP.setdefault(loop, {})
+    key = (digest, id(AsyncOpenAI))
+    client = bucket.get(key)
+    if client is None:
+        client = _new_model_client(config)
+        bucket[key] = client
+    return client
+
+
+async def close_shared_model_clients() -> None:
+    """Close only clients owned by the currently shutting-down event loop."""
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    clients = list(_MODEL_CLIENTS_BY_LOOP.pop(loop, {}).values())
+    if clients:
+        await asyncio.gather(
+            *(asyncio.wait_for(client.close(), timeout=1.0) for client in clients),
+            return_exceptions=True,
+        )
+
+
+def build_chat_completions_model(config: ModelConfig) -> OpenAIChatCompletionsModel:
+    client = get_shared_model_client(config)
     return OpenAIChatCompletionsModel(
         model=config.model_name,
         openai_client=client,
@@ -367,12 +416,12 @@ def diagnostic_reasoner_runtime_policy():
         max_turns=1,
         # Proposals are read-only until server validation commits them, so
         # transient provider failures can be retried without duplicate writes.
-        # Up to three attempts share one total 90-second deadline. Fast
-        # malformed/transient failures can recover, while one genuinely slow
-        # request cannot multiply the browser wait to 270 seconds. DeepSeek
+        # Up to two attempts share one total 90-second deadline. One transient
+        # failure can recover without multiplying an upstream queue into three
+        # long waits. DeepSeek
         # thinking responses regularly need more than the former 45-second cap
         # to finish their reasoning_content and produce visible JSON content.
-        read_only_retries=2,
+        read_only_retries=min(base.read_only_retries, 1),
         token_budget=min(base.token_budget, 32_000),
     )
 
@@ -1199,73 +1248,76 @@ async def _request_diagnostic_proposal(
     deadline = None if interactive_wait else started + policy.timeout_s
     model_requests = 0
     last_reason_kind = "proposal_unavailable"
+    purpose: Literal["control", "analysis"] = (
+        "control" if proposal_model is DiagnosticIntakeProposal else "analysis"
+    )
+    configured_directive = provider_reasoning_directive(
+        config.base_url,
+        config.model_name,
+        strategy=config.reasoning_strategy,
+        purpose=purpose,
+    )
+    configured_run_mode: Literal["fast", "high", "provider_default"] = (
+        "high"
+        if configured_directive.effective_mode == "deep"
+        else configured_directive.effective_mode
+    )
+    client = get_shared_model_client(config)
     for attempt in range(1, policy.read_only_retries + 2):
         remaining_s = None if deadline is None else deadline - time.perf_counter()
         if remaining_s is not None and remaining_s <= 0:
             last_reason_kind = "timeout"
             failures.append("TimeoutError: diagnostic proposal deadline exhausted")
             break
-        client = AsyncOpenAI(
-            api_key=config.api_key,
-            base_url=config.base_url,
-            max_retries=0,
-            timeout=None if interactive_wait else policy.timeout_s,
-        )
         try:
             user_payload = dict(payload)
             if feedback:
                 user_payload["server_validation_feedback"] = feedback[:500]
-            purpose: Literal["control", "analysis"] = (
-                "control" if proposal_model is DiagnosticIntakeProposal else "analysis"
-            )
-            reasoning_directive = provider_reasoning_directive(
-                config.base_url,
-                config.model_name,
-                strategy=config.reasoning_strategy,
-                purpose=purpose,
-            )
-            request_kwargs: dict[str, Any] = {
-                "model": config.model_name,
-                "messages": [
-                    {"role": "system", "content": instructions},
-                    {
-                        "role": "user",
-                        "content": json.dumps(
-                            user_payload,
-                            ensure_ascii=False,
-                            sort_keys=True,
-                            separators=(",", ":"),
-                        ),
-                    },
-                ],
-                # ``token_budget`` is an audit threshold, not a generation
-                # guillotine. The operation-specific ceiling is deliberately
-                # generous enough to include hidden reasoning plus visible JSON.
-                "max_tokens": max_tokens,
-                **reasoning_directive.chat_completions_kwargs(),
-            }
-            # DeepSeek documents temperature as unsupported in thinking mode.
-            # Omit it there instead of sending an ignored provider-specific mix.
-            if reasoning_directive.effective_mode != "deep":
-                request_kwargs["temperature"] = 0.1
-            if strict_schema:
-                request_kwargs["response_format"] = {
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": proposal_model.__name__.lower(),
-                        "strict": True,
-                        "schema": ensure_strict_json_schema(
-                            proposal_model.model_json_schema()
-                        ),
-                    },
-                }
-            def request_model(
-                active_client: AsyncOpenAI = client,
-                active_kwargs: dict[str, Any] = request_kwargs,
-            ):
+            active_reasoning_directive = configured_directive
+
+            async def request_model(active_user_payload: dict[str, object] = user_payload):
+                nonlocal active_reasoning_directive
                 nonlocal model_requests
+                active_mode = current_model_run_reasoning_mode(configured_run_mode)
+                active_strategy: ReasoningStrategy = (
+                    "fast" if active_mode == "fast" else config.reasoning_strategy
+                )
+                active_reasoning_directive = provider_reasoning_directive(
+                    config.base_url,
+                    config.model_name,
+                    strategy=active_strategy,
+                    purpose=purpose,
+                )
+                request_kwargs: dict[str, Any] = {
+                    "model": config.model_name,
+                    "messages": [
+                        {"role": "system", "content": instructions},
+                        {
+                            "role": "user",
+                            "content": json.dumps(
+                                active_user_payload,
+                                ensure_ascii=False,
+                                sort_keys=True,
+                                separators=(",", ":"),
+                            ),
+                        },
+                    ],
+                    "max_tokens": max_tokens,
+                    "stream": True,
+                    **active_reasoning_directive.chat_completions_kwargs(),
+                }
+                if active_reasoning_directive.effective_mode != "deep":
+                    request_kwargs["temperature"] = 0.1
+                if strict_schema:
+                    # DeepSeek's documented Chat Completions contract supports
+                    # JSON Object rather than OpenAI's JSON Schema extension.
+                    # Pydantic still performs the strict server-side validation.
+                    request_kwargs["response_format"] = {"type": "json_object"}
                 model_requests += 1
-                return active_client.chat.completions.create(**active_kwargs)
+                response_or_stream = await client.chat.completions.create(
+                    **request_kwargs
+                )
+                return await consume_chat_completion(response_or_stream)
 
             response = await await_model_with_user_control(
                 operation=(
@@ -1278,29 +1330,27 @@ async def _request_diagnostic_proposal(
                 model=config.model_name,
                 noninteractive_timeout_s=remaining_s,
                 awaitable_factory=request_model,
+                reasoning_mode=configured_run_mode,
+                supports_fast_switch=(configured_run_mode == "high"),
             )
-            choice = response.choices[0]
-            message = choice.message
-            content = message.content or ""
+            content = response.content
             if not str(content).strip():
-                reasoning_content = getattr(message, "reasoning_content", None) or ""
                 raise DiagnosticProposalUnavailable(
                     "empty-visible-output"
-                    f";finish_reason={choice.finish_reason or 'unknown'}"
-                    f";reasoning_chars={len(str(reasoning_content))}"
+                    f";finish_reason={response.finish_reason or 'unknown'}"
+                    f";reasoning_chars={response.reasoning_characters}"
                 )
             proposal = _extract_diagnostic_proposal(content, proposal_model)
             if proposal_validator is not None:
                 proposal_validator(proposal)
-            usage = response.usage
             return proposal, {
                 "transport": "validated_json_chat",
                 "model": config.model_name,
-                "reasoning_mode": reasoning_directive.effective_mode,
+                "reasoning_mode": active_reasoning_directive.effective_mode,
                 "attempts": attempt,
                 "elapsed_ms": max(0, round((time.perf_counter() - started) * 1000)),
-                "input_tokens": int(usage.prompt_tokens) if usage is not None else None,
-                "output_tokens": int(usage.completion_tokens) if usage is not None else None,
+                "input_tokens": response.prompt_tokens,
+                "output_tokens": response.completion_tokens,
                 "fallback_reason": None,
             }
         except Exception as exc:
@@ -1350,11 +1400,6 @@ async def _request_diagnostic_proposal(
                 await asyncio.sleep(backoff_s)
             else:
                 break
-        finally:
-            try:
-                await asyncio.wait_for(client.close(), timeout=0.25)
-            except (TimeoutError, OpenAIError):
-                pass
     elapsed_ms = max(0, round((time.perf_counter() - started) * 1000))
     if last_reason_kind != "user_fallback":
         decision = await await_model_validation_recovery_decision(
@@ -1364,7 +1409,7 @@ async def _request_diagnostic_proposal(
             ),
             error_kind=last_reason_kind,
         )
-        if decision == "retry":
+        if decision in {"retry", "retry_fast"}:
             try:
                 proposal, runtime = await _request_diagnostic_proposal(
                     proposal_model=proposal_model,
@@ -2272,6 +2317,8 @@ async def run_diagnostic_intake_agent(case_id: str) -> str:
     total_model_requests = 0
     total_elapsed_ms = 0
     proposal_committed = False
+    fallback_authorized = False
+    last_reason_kind = "proposal_unavailable"
 
     def validate_intake_proposal(proposal: DiagnosticIntakeProposal) -> None:
         if proposal.case_id != case_id:
@@ -2309,6 +2356,8 @@ async def run_diagnostic_intake_agent(case_id: str) -> str:
                 total_model_requests += max(1, exc.model_requests)
                 total_elapsed_ms += max(0, exc.elapsed_ms)
             fallback_reason = f"{type(exc).__name__}: {str(exc)[:240]}"
+            last_reason_kind = exc.reason_kind
+            fallback_authorized = exc.reason_kind == "user_fallback"
             validation_feedback = (
                 "上一份提案未通过服务器且没有写入。请仅修正以下错误后完整重发：" + fallback_reason
             )
@@ -2327,11 +2376,19 @@ async def run_diagnostic_intake_agent(case_id: str) -> str:
             if not request_accounted:
                 total_model_requests += 1
             fallback_reason = f"{type(exc).__name__}: {str(exc)[:240]}"
+            last_reason_kind = "invalid_response"
             validation_feedback = (
                 "上一份提案未通过服务器且没有写入。请仅修正以下错误后完整重发：" + fallback_reason
             )
     if not proposal_committed:
-        # Intake has not mutated state yet, so a conservative server-authored plan is safe.
+        if not fallback_authorized:
+            raise DiagnosticProposalUnavailable(
+                fallback_reason or "diagnostic intake proposal unavailable",
+                reason_kind=last_reason_kind,
+                model_requests=total_model_requests,
+                elapsed_ms=total_elapsed_ms,
+            )
+        # The user explicitly requested this weaker, clearly labelled path.
         _commit_intake_proposal(_deterministic_intake_proposal(case_id))
         runtime = {
             "transport": "deterministic_fallback",
@@ -2379,6 +2436,8 @@ async def run_diagnostic_measurement_agent(
     fallback_reason: str | None = None
     fallback_model_requests = 0
     fallback_elapsed_ms = 0
+    fallback_authorized = False
+    last_reason_kind = "proposal_unavailable"
     validation_feedback = ""
     for _server_attempt in range(1):
         request_payload = dict(payload)
@@ -2418,18 +2477,28 @@ async def run_diagnostic_measurement_agent(
             fallback_model_requests = max(1, exc.model_requests)
             fallback_elapsed_ms = max(0, exc.elapsed_ms)
             fallback_reason = f"{type(exc).__name__}: {str(exc)[:240]}"
+            last_reason_kind = exc.reason_kind
+            fallback_authorized = exc.reason_kind == "user_fallback"
             validation_feedback = (
                 "上一份提案未通过服务器且没有写入。请修正错误并完整重发：" + fallback_reason
             )
         except (ValidationError, ValueError, RuntimeError, KeyError) as exc:
             fallback_model_requests = max(fallback_model_requests, 1)
             fallback_reason = f"{type(exc).__name__}: {str(exc)[:240]}"
+            last_reason_kind = "invalid_response"
             validation_feedback = (
                 "上一份提案未通过服务器且没有写入。请修正错误并完整重发：" + fallback_reason
             )
     if not commit_succeeded:
-        # Model generation is read-only.  If both attempts fail, commit a truth-preserving
-        # deterministic receipt instead of surfacing a timeout or dropping the analyzed record.
+        if not fallback_authorized:
+            raise DiagnosticProposalUnavailable(
+                fallback_reason or "diagnostic measurement proposal unavailable",
+                reason_kind=last_reason_kind,
+                model_requests=fallback_model_requests,
+                elapsed_ms=fallback_elapsed_ms,
+            )
+        # Model generation is read-only; only the user's explicit choice authorizes
+        # this truth-preserving deterministic receipt.
         fallback = _deterministic_measurement_proposal(
             case_id,
             task_id,
@@ -2483,6 +2552,8 @@ async def run_diagnostic_finalization_agent(case_id: str) -> DiagnosticFinalRepo
         )
         report = build_model_finalization(case, proposal, runtime=runtime).report
     except DiagnosticProposalUnavailable as exc:
+        if exc.reason_kind != "user_fallback":
+            raise
         report = build_fallback_finalization(
             case,
             fallback_reason=f"{exc.reason_kind}: {str(exc)[:430]}",
@@ -2491,13 +2562,12 @@ async def run_diagnostic_finalization_agent(case_id: str) -> DiagnosticFinalRepo
             elapsed_ms=exc.elapsed_ms,
         )
     except (ValidationError, ValueError, RuntimeError, KeyError) as exc:
-        report = build_fallback_finalization(
-            case,
-            fallback_reason=f"{type(exc).__name__}: {str(exc)[:430]}",
-            model=str(runtime.get("model") or model_name),
+        raise DiagnosticProposalUnavailable(
+            f"{type(exc).__name__}: {str(exc)[:430]}",
+            reason_kind="invalid_response",
             model_requests=int(runtime.get("attempts") or 0),
             elapsed_ms=int(runtime.get("elapsed_ms") or 0),
-        )
+        ) from exc
     diagnostic_case_store.set_final_report(case_id, report)
     return report
 
